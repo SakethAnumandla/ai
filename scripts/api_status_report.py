@@ -63,7 +63,7 @@ user = User(
 )
 db.add(user)
 db.flush()
-db.add(Wallet(user_id=user.id, balance=10000.0))
+db.add(Wallet(user_id=user.id))
 db.add(
     Expense(
         user_id=user.id,

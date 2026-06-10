@@ -122,7 +122,7 @@ def reset_and_seed(db: Session) -> SeedIds:
     db.add(user)
     db.flush()
 
-    db.add(Wallet(user_id=user.id, balance=10000.0))
+    db.add(Wallet(user_id=user.id))
 
     expense_draft = Expense(
         user_id=user.id,
