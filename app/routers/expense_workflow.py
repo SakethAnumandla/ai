@@ -67,7 +67,7 @@ async def expense_approval_action(
             approval_id=approval_id,
             user=user,
             action=body.action,
-            comments=body.comments,
+            comments=body.resolved_remarks(),
         )
         db.commit()
         db.refresh(expense)

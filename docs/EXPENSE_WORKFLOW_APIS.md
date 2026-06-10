@@ -22,6 +22,8 @@ Documentation for **Flutter expense workflow** endpoints. These routes are regis
 | GET | `/expenses/approvals/pending` | [3](#3-get-expensesapprovalspending) |
 | GET | `/expenses/{expense_id}/approval-workflow` | [4](#4-get-expensesexpense_idapproval-workflow) |
 | POST | `/expenses/approvals/{approval_id}/action` | [5](#5-post-expensesapprovalsapproval_idaction) |
+| GET | `/expenses/{expense_id}/approval-remarks` | [5b](#5b-get-expensesexpense_idapproval-remarks) |
+| GET | `/expenses/{expense_id}/details` | [5c](#5c-get-expensesexpense_iddetails-remarks-table) |
 | GET | `/budgets/monthly` | [6](#6-get-budgetsmonthly) |
 | GET | `/wallet/budget-utilisation` | [7](#7-get-walletbudget-utilisation) |
 | GET | `/dashboard/export-by-fy` | [8](#8-get-dashboardexport-by-fy) |
@@ -376,7 +378,7 @@ User must be submitter, current approver, or a past approver on the expense.
 |------|------|----------|------------|
 | Path | `approval_id` | yes | Integer — `ExpenseApproval.id` from pending/workflow |
 | Body | `action` | yes | Regex: `approve` or `reject` only |
-| Body | `comments` | conditional | **Required non-empty string when `action` is `approve`**; optional for `reject` |
+| Body | `comments` or `remarks` | yes | **Required non-empty string for both `approve` and `reject`** (`remarks` is an alias for `comments`) |
 
 **Content-Type:** `application/json`
 
@@ -385,14 +387,24 @@ User must be submitter, current approver, or a past approver on the expense.
 ```json
 {
   "action": "approve",
-  "comments": "Verified against policy POL-001"
+  "remarks": "Verified against policy POL-001"
+}
+```
+
+Reject example:
+
+```json
+{
+  "action": "reject",
+  "remarks": "Receipt missing GST number — please resubmit"
 }
 ```
 
 | Field | Type | Rules |
 |-------|------|-------|
 | `action` | string | Exactly `approve` or `reject` |
-| `comments` | string \| null | Approve: required, trimmed non-empty. Reject: optional |
+| `comments` | string \| null | Approver remarks (required for approve and reject) |
+| `remarks` | string \| null | Alias for `comments` — stored on the bill and shown in bill details |
 
 ### Business validation (→ `400`)
 
@@ -403,7 +415,8 @@ User must be submitter, current approver, or a past approver on the expense.
 | `Expense is not awaiting approval` | Status not `submitted` / `pending` |
 | `Earlier approval steps must be completed first` | Out-of-order action |
 | `You are not authorized to act on this approval step` | Wrong user |
-| `Approval comments are required` | `approve` without comments |
+| `Approval remarks are required` | `approve` without remarks |
+| `Rejection remarks are required` | `reject` without remarks |
 | `action must be approve or reject` | Invalid action |
 
 ### Output `200` — JSON
@@ -419,7 +432,8 @@ Key fields clients should validate:
 | `approval_stage_label` | string \| null | |
 | `approval_progress` | array | Updated chain |
 | `approval_chain` | array | |
-| `rejection_reason` | string \| null | Set on reject |
+| `rejection_reason` | string \| null | Set on reject (same text as reject remarks) |
+| `approval_remarks` | array | Rows for bill-details remarks table (see §5b) |
 | `approved_at` | datetime \| null | Set when fully approved |
 | `bill_amount`, `bill_name`, `bill_date` | | Unchanged unless reject updates status |
 
@@ -438,7 +452,87 @@ Key fields clients should validate:
 }
 ```
 
-**Flutter:** `expenseApprovalAction(approvalId, action: 'approve', comments: '...')`.
+**Flutter:** `expenseApprovalAction(approvalId, action: 'approve', remarks: '...')`.
+
+---
+
+## 5b. GET `/expenses/{expense_id}/approval-remarks`
+
+**Full URL:** `https://api.bizwy.in/expenses/{expense_id}/approval-remarks`
+
+Returns the **remarks table** for bill details — one row per approver who has approved or rejected.
+
+### Output `200` — JSON
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `expense_id` | integer | Bill id |
+| `expense_id_label` | string | e.g. `EXP-0042` |
+| `status` | string | Current expense status |
+| `count` | integer | Number of remark rows |
+| `remarks_table` | array | Ordered L1 → L2 → L3 |
+
+**`remarks_table[]` row**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `approval_id` | integer | `ExpenseApproval.id` |
+| `level` | integer | `1`, `2`, or `3` |
+| `role` | string | e.g. `manager`, `hod`, `ceo` |
+| `role_label` | string | e.g. `Manager`, `Head of Department` |
+| `approver` | string | Approver display name |
+| `action` | string | `approved` or `rejected` |
+| `remarks` | string | Approver comment |
+| `acted_at` | datetime \| null | When the decision was recorded |
+
+### Example
+
+```json
+{
+  "expense_id": 42,
+  "expense_id_label": "EXP-0042",
+  "status": "approved",
+  "count": 2,
+  "remarks_table": [
+    {
+      "approval_id": 15,
+      "level": 1,
+      "role": "manager",
+      "role_label": "Manager",
+      "approver": "Priya S",
+      "action": "approved",
+      "remarks": "Amount within team budget",
+      "comments": "Amount within team budget",
+      "acted_at": "2026-06-10T10:30:00Z"
+    },
+    {
+      "approval_id": 16,
+      "level": 2,
+      "role": "hod",
+      "role_label": "Head of Department",
+      "approver": "Rahul M",
+      "action": "approved",
+      "remarks": "Final approval — policy compliant",
+      "comments": "Final approval — policy compliant",
+      "acted_at": "2026-06-10T11:05:00Z"
+    }
+  ]
+}
+```
+
+---
+
+## 5c. GET `/expenses/{expense_id}/details` — remarks table
+
+**Full URL:** `https://api.bizwy.in/expenses/{expense_id}/details`
+
+Full bill details response includes:
+
+- `remarks_table` — same structure as §5b (use for bill-details UI table)
+- `approval_remarks` — identical data (backward compatible)
+- `ocr_details` — OCR breakdown when available
+
+After any approver acts via §5, refresh bill details to show new rows in `remarks_table`.
 
 ---
 

@@ -12,6 +12,7 @@ from app.dependencies import ExpenseFilters, PaginationParams, get_current_user,
 from app.domain.workflow_schemas import ExpenseApprovalAction
 from app.models import ExpenseStatus, MainCategory, TransactionType, User
 from app.services.expense_approval_service import (
+    build_expense_approval_remarks_payload,
     build_expense_approval_workflow_payload,
     build_pending_expense_approval_queue,
     get_expense_for_viewer,
@@ -20,6 +21,7 @@ from app.services.expense_approval_service import (
 from app.schemas import (
     BillDraftItem,
     ExpenseApproval,
+    ExpenseApprovalRemarksResponse,
     ExpenseDetailResponse,
     ExpenseFileResponse,
     ExpenseResponse,
@@ -82,7 +84,7 @@ async def expense_approval_action(
             approval_id=approval_id,
             user=user,
             action=body.action,
-            comments=body.comments,
+            comments=body.resolved_remarks(),
         )
         db.commit()
         db.refresh(expense)
@@ -216,6 +218,17 @@ async def replace_expense_taxes(
     db.refresh(expense)
     expense = ExpenseAccessService(db).get_for_viewer(expense_id, current_user.id)
     return build_tax_summary_response(expense)
+
+
+@router.get("/{expense_id}/approval-remarks", response_model=ExpenseApprovalRemarksResponse)
+async def get_expense_approval_remarks(
+    expense_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_default_user),
+):
+    """Approver remarks table for bill details (L1/L2/L3 after approve or reject)."""
+    expense = ExpenseAccessService(db).get_for_viewer(expense_id, current_user.id)
+    return build_expense_approval_remarks_payload(expense)
 
 
 @router.get("/{expense_id}/details", response_model=ExpenseDetailResponse)

@@ -14,6 +14,7 @@ from app.data.business_taxonomy import (
 )
 from app.dependencies import DEV_USER_USERNAME
 from app.models import ApprovalStatus, Expense, ExpenseApproval, ExpenseStatus, User
+from app.schemas import ExpenseApprovalRemark, ExpenseApprovalRemarksResponse
 
 
 def _roles_for_expense(expense: Expense) -> List[str]:
@@ -82,27 +83,42 @@ def approval_chain_for_expense(expense: Expense) -> List[Dict[str, Any]]:
     return out
 
 
-def approval_remarks_for_expense(expense: Expense) -> List[Dict[str, Any]]:
-    """Approver comments visible to the employee after decisions."""
+def approval_remarks_for_expense(expense: Expense) -> List[ExpenseApprovalRemark]:
+    """Approver remarks visible in bill details after approve/reject decisions."""
     steps = sorted(expense.approval_steps or [], key=lambda s: s.sequence_order)
-    remarks: List[Dict[str, Any]] = []
+    remarks: List[ExpenseApprovalRemark] = []
     for s in steps:
         if s.status not in (ApprovalStatus.APPROVED, ApprovalStatus.REJECTED):
             continue
         if not (s.comments and str(s.comments).strip()):
             continue
+        text = s.comments.strip()
         remarks.append(
-            {
-                "level": s.sequence_order,
-                "role": s.approval_level,
-                "approver": s.approver_name,
-                "label": s.approver_role_label or s.approval_level,
-                "action": s.status.value if s.status else "pending",
-                "comments": s.comments.strip(),
-                "acted_at": s.acted_at.isoformat() if s.acted_at else None,
-            }
+            ExpenseApprovalRemark(
+                approval_id=s.id,
+                level=s.sequence_order,
+                role=s.approval_level,
+                role_label=s.approver_role_label or s.approval_level,
+                approver=s.approver_name,
+                action=s.status.value if s.status else "pending",
+                remarks=text,
+                comments=text,
+                acted_at=s.acted_at,
+            )
         )
     return remarks
+
+
+def build_expense_approval_remarks_payload(expense: Expense) -> ExpenseApprovalRemarksResponse:
+    """Payload for GET /expenses/{id}/approval-remarks."""
+    table = approval_remarks_for_expense(expense)
+    return ExpenseApprovalRemarksResponse(
+        expense_id=expense.id,
+        expense_id_label=f"EXP-{expense.id:04d}",
+        status=expense.status.value if expense.status else "draft",
+        count=len(table),
+        remarks_table=table,
+    )
 
 
 def _pick_approver(role: str) -> Dict[str, Any]:
@@ -365,7 +381,7 @@ def process_expense_approval(
 
     if action == "approve":
         if not comments or not str(comments).strip():
-            raise ValueError("Approval comments are required")
+            raise ValueError("Approval remarks are required")
         step.status = ApprovalStatus.APPROVED
         if actor and step.approver_id is None:
             step.approver_id = actor.id
@@ -391,15 +407,18 @@ def process_expense_approval(
             WalletService(db).update_wallet_balance(expense.user_id, expense)
         db.flush()
     elif action == "reject":
+        if not comments or not str(comments).strip():
+            raise ValueError("Rejection remarks are required")
+        remark_text = str(comments).strip()
         step.status = ApprovalStatus.REJECTED
-        step.comments = (comments or "").strip() or None
+        step.comments = remark_text
         step.acted_at = now
         if actor and step.approver_id is None:
             step.approver_id = actor.id
             if not step.approver_name:
                 step.approver_name = actor.full_name or actor.username
         expense.status = ExpenseStatus.REJECTED
-        expense.rejection_reason = comments
+        expense.rejection_reason = remark_text
         db.flush()
     else:
         raise ValueError("action must be approve or reject")
@@ -559,11 +578,14 @@ def build_expense_approval_workflow_payload(
     expense: Expense,
 ) -> Dict[str, Any]:
     """Workflow detail payload for GET /expenses/{id}/approval-workflow."""
+    remarks = approval_remarks_for_expense(expense)
     return {
         "expense_id": expense.id,
         "status": expense.status.value,
         "stage_label": approval_stage_label(expense),
         "progress": get_workflow_progress(expense),
+        "remarks_table": [row.model_dump(mode="json") for row in remarks],
+        "approval_remarks": [row.model_dump(mode="json") for row in remarks],
         "steps": [
             {
                 "id": step.id,

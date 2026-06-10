@@ -396,6 +396,40 @@ class ExpenseFileResponse(BaseModel):
     class Config:
         from_attributes = True
 
+
+class ExpenseApprovalRemark(BaseModel):
+    """Single row in the bill-details approver remarks table."""
+
+    approval_id: int
+    level: int
+    role: Optional[str] = None
+    role_label: Optional[str] = None
+    approver: Optional[str] = None
+    action: str = Field(..., description="approved or rejected")
+    remarks: str = Field(..., description="Approver comment at this level")
+    comments: Optional[str] = Field(
+        None, description="Deprecated alias for remarks (same value)"
+    )
+    acted_at: Optional[datetime] = None
+
+    def model_post_init(self, __context) -> None:
+        if self.comments is None:
+            self.comments = self.remarks
+
+
+class ExpenseApprovalRemarksResponse(BaseModel):
+    """Approver remarks for an expense bill (bill details remarks table)."""
+
+    expense_id: int
+    expense_id_label: str
+    status: str
+    count: int
+    remarks_table: List[ExpenseApprovalRemark] = Field(
+        default_factory=list,
+        description="Ordered L1 → L2 → L3 remarks from approvers",
+    )
+
+
 class ExpenseResponse(ExpenseBase):
     id: int
     user_id: int
@@ -423,7 +457,10 @@ class ExpenseResponse(ExpenseBase):
     approval_stage_label: Optional[str] = None
     approval_chain: Optional[List[Dict[str, Any]]] = None
     approval_progress: Optional[List[Dict[str, Any]]] = None
-    approval_remarks: Optional[List[Dict[str, Any]]] = None
+    approval_remarks: List[ExpenseApprovalRemark] = Field(
+        default_factory=list,
+        description="Approver remarks after approve/reject decisions",
+    )
     submitted_by_display: Optional[str] = None
     line_item: Optional[str] = None
     line_item_label: Optional[str] = None
@@ -662,6 +699,10 @@ class OCRBillDetailResponse(BaseModel):
 
 class ExpenseDetailResponse(ExpenseResponse):
     ocr_details: Optional[OCRBillDetailResponse] = None
+    remarks_table: List[ExpenseApprovalRemark] = Field(
+        default_factory=list,
+        description="Bill details remarks table (same data as approval_remarks)",
+    )
 
 class BillPrefillData(BaseModel):
     """OCR/manual prefill payload for expense entry form."""

@@ -239,9 +239,12 @@ def build_expense_detail_response(
     expense: Expense, ocr_bill: Optional[OCRBill] = None
 ) -> ExpenseDetailResponse:
     base = build_expense_response(expense)
+    remarks = approval_remarks_for_expense(expense)
     return ExpenseDetailResponse(
         **base.model_dump(),
         ocr_details=ocr_bill_to_detail(ocr_bill) if ocr_bill else None,
+        remarks_table=remarks,
+        approval_remarks=remarks,
     )
 
 
