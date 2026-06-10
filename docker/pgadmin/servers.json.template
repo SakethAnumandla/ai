@@ -1,0 +1,14 @@
+{
+  "Servers": {
+    "1": {
+      "Name": "Expense Tracker (Aiven)",
+      "Group": "Servers",
+      "Host": "HOST_PLACEHOLDER",
+      "Port": PORT_PLACEHOLDER,
+      "MaintenanceDB": "DB_PLACEHOLDER",
+      "Username": "USER_PLACEHOLDER",
+      "SSLMode": "require",
+      "PassFile": "/pgpass"
+    }
+  }
+}

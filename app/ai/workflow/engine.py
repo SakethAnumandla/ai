@@ -1,0 +1,291 @@
+"""Continue active expense workflows before general chat routing."""
+import logging
+from dataclasses import dataclass, field
+from typing import Any, Dict, Optional
+
+from sqlalchemy.orm import Session
+
+from app.ai.conversation.expense_manage import ExpenseManageWorkflow
+from app.ai.conversation.state_machine import ConversationStateMachine
+from app.ai.schemas.common import SessionContext, TenantUserContext
+from app.ai.schemas.memory import DraftExpenseContext, PendingIntent
+from app.ai.schemas.workflow import ConversationWorkflowState, WorkflowScope, WorkflowType
+from app.ai.services.memory_service import MemoryService
+from app.ai.workflow.draft_summary import format_draft_summary
+from app.ai.workflow.slot_parser import (
+    infer_food_sub_category,
+    is_workflow_slot_message,
+    parse_slot_updates,
+    sanitize_sub_category,
+)
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class WorkflowContinueResult:
+    handled: bool = False
+    message: Optional[str] = None
+    execute_tool: Optional[str] = None
+    execute_arguments: Dict[str, Any] = field(default_factory=dict)
+
+
+class WorkflowEngine:
+    def __init__(
+        self,
+        memory: MemoryService,
+        db: Optional[Session] = None,
+        state_machine: Optional[ConversationStateMachine] = None,
+    ):
+        self._memory = memory
+        self._db = db
+        self._sm = state_machine or ConversationStateMachine()
+
+    async def get_active_context(
+        self, ctx: SessionContext
+    ) -> tuple[Optional[ConversationWorkflowState], Optional[DraftExpenseContext], Optional[PendingIntent]]:
+        state = await self._memory.get_workflow_state(ctx)
+        draft = await self._memory.get_draft_expense(ctx)
+        pending = await self._memory.get_pending_intent(ctx)
+        return state, draft, pending
+
+    def log_active_context(
+        self,
+        ctx: SessionContext,
+        *,
+        state: Optional[ConversationWorkflowState],
+        draft: Optional[DraftExpenseContext],
+        pending: Optional[PendingIntent],
+    ) -> None:
+        logger.info(
+            "workflow.context session_id=%s user_id=%s tenant_id=%s "
+            "active_workflow=%s draft=%s pending_intent=%s",
+            ctx.session_id,
+            ctx.user_id,
+            ctx.tenant_id,
+            state.workflow_type.value if state else None,
+            draft.model_dump() if draft else None,
+            pending.intent_type if pending else None,
+        )
+
+    async def continue_workflow(
+        self,
+        ctx: SessionContext,
+        user_content: str,
+        *,
+        prefill: Optional[Dict[str, Any]] = None,
+    ) -> WorkflowContinueResult:
+        """
+        Apply slot updates or advance slot-filling for an active expense workflow.
+        Returns assistant message if handled, else None.
+        """
+        state, draft, pending = await self.get_active_context(ctx)
+        self.log_active_context(ctx, state=state, draft=draft, pending=pending)
+
+        if state is None and draft and (draft.fields_pending or self._draft_incomplete(draft)):
+            state = self._sm.start_from_draft(draft, session_id=ctx.session_id)
+            logger.info("workflow.loaded from_draft session_id=%s", ctx.session_id)
+
+        if state is None and pending and pending.intent_type == "expense_create":
+            slots = dict(pending.parameters or {})
+            state = ConversationWorkflowState(
+                workflow_type=WorkflowType.EXPENSE_CREATE,
+                scope=WorkflowScope.EXPENSE,
+                slots=slots,
+                pending_slots=list(slots.get("fields_pending") or []),
+                session_id=ctx.session_id,
+            )
+            logger.info("workflow.loaded from_pending_intent session_id=%s", ctx.session_id)
+
+        if state is None:
+            return WorkflowContinueResult(handled=False)
+
+        if state.workflow_type in (WorkflowType.EXPENSE_DELETE, WorkflowType.EXPENSE_UPDATE):
+            if self._db is None:
+                return WorkflowContinueResult(handled=False)
+            manage = ExpenseManageWorkflow(self._db)
+            mg_result = manage.process_turn(user_content, state)
+            if mg_result.handled:
+                return await self._finalize_manage_result(ctx, mg_result)
+            return WorkflowContinueResult(handled=False)
+
+        updates = parse_slot_updates(user_content)
+        if updates:
+            if updates.get("sub_category"):
+                if updates.get("sub_category_raw"):
+                    state.slots["sub_category_raw"] = updates["sub_category_raw"]
+                mapped = sanitize_sub_category(
+                    state.slots.get("main_category"),
+                    updates["sub_category"],
+                    vendor_name=state.slots.get("vendor_name"),
+                    bill_name=state.slots.get("bill_name"),
+                )
+                if mapped:
+                    updates["sub_category"] = mapped
+                else:
+                    updates.pop("sub_category", None)
+            for key, value in updates.items():
+                if key.endswith("_raw") or value is None:
+                    continue
+                state.fill_slot(key, value)
+            await self._persist(ctx, state)
+            logger.info(
+                "workflow.slot_filled session_id=%s updates=%s remaining=%s",
+                ctx.session_id,
+                updates,
+                state.pending_slots,
+            )
+            if not state.pending_slots:
+                return WorkflowContinueResult(
+                    handled=True,
+                    message=format_draft_summary(state.slots),
+                )
+            return WorkflowContinueResult(
+                handled=True,
+                message=format_draft_summary(state.slots, intro="Updated draft"),
+            )
+
+        sm_result = self._sm.process_turn(
+            user_content, state, session_id=ctx.session_id, prefill=prefill
+        )
+        if sm_result.handled:
+            return await self._finalize_sm_result(ctx, sm_result)
+
+        if is_workflow_slot_message(user_content):
+            return WorkflowContinueResult(
+                handled=True,
+                message=format_draft_summary(state.slots, intro="Here's what I have so far"),
+            )
+
+        return WorkflowContinueResult(handled=False)
+
+    async def save_pending_expense(
+        self,
+        ctx: SessionContext,
+        slots: Dict[str, Any],
+        *,
+        fields_pending: Optional[list] = None,
+    ) -> None:
+        pending_fields = fields_pending or []
+        if slots.get("main_category") == "food":
+            inferred = infer_food_sub_category(
+                vendor_name=slots.get("vendor_name"),
+                bill_name=slots.get("bill_name"),
+            )
+            if inferred:
+                slots["sub_category"] = inferred
+        pending_fields = [f for f in pending_fields if f != "sub_category"]
+
+        state = ConversationWorkflowState(
+            workflow_type=WorkflowType.EXPENSE_CREATE,
+            scope=WorkflowScope.EXPENSE,
+            slots=slots,
+            pending_slots=pending_fields,
+            session_id=ctx.session_id,
+        )
+        await self._persist(ctx, state)
+        await self._memory.set_pending_intent(
+            ctx,
+            PendingIntent(
+                intent_type="expense_create",
+                parameters={**slots, "fields_pending": pending_fields},
+            ),
+        )
+        logger.info(
+            "workflow.saved session_id=%s slots=%s pending=%s",
+            ctx.session_id,
+            slots,
+            pending_fields,
+        )
+
+    @staticmethod
+    def _draft_incomplete(draft: DraftExpenseContext) -> bool:
+        return bool(
+            draft.bill_amount
+            or draft.vendor_name
+            or draft.fields_pending
+        )
+
+    async def persist_workflow_state(
+        self,
+        ctx: SessionContext,
+        state: ConversationWorkflowState,
+    ) -> None:
+        await self._persist(ctx, state)
+
+    async def _persist(
+        self,
+        ctx: SessionContext,
+        state: ConversationWorkflowState,
+    ) -> None:
+        state.session_id = ctx.session_id
+        await self._memory.set_workflow_state(ctx, state)
+        intent_type = "expense_create"
+        if state.workflow_type == WorkflowType.EXPENSE_DELETE:
+            intent_type = "expense_delete"
+        elif state.workflow_type == WorkflowType.EXPENSE_UPDATE:
+            intent_type = "expense_update"
+        else:
+            await self._memory.set_draft_expense(ctx, self._sm.state_to_draft(state))
+        await self._memory.set_pending_intent(
+            ctx,
+            PendingIntent(
+                intent_type=intent_type,
+                parameters={
+                    **state.slots,
+                    "fields_pending": list(state.pending_slots),
+                    "session_id": ctx.session_id,
+                },
+            ),
+        )
+        logger.info("workflow.persisted session_id=%s type=%s", ctx.session_id, intent_type)
+
+    async def _finalize_manage_result(self, ctx, mg_result) -> WorkflowContinueResult:
+        if mg_result.updated_state and not mg_result.clear_state:
+            await self._persist(ctx, mg_result.updated_state)
+        if mg_result.clear_state:
+            await self._memory.clear_workflow_state(ctx)
+            await self._memory.clear_pending_intent(ctx)
+
+        if mg_result.ready_tool_name:
+            return WorkflowContinueResult(
+                handled=True,
+                execute_tool=mg_result.ready_tool_name,
+                execute_arguments=dict(mg_result.ready_arguments or {}),
+            )
+        if mg_result.assistant_message:
+            return WorkflowContinueResult(
+                handled=True,
+                message=mg_result.assistant_message,
+            )
+        return WorkflowContinueResult(handled=False)
+
+    async def _finalize_sm_result(self, ctx, sm_result) -> WorkflowContinueResult:
+        if sm_result.updated_state:
+            await self._persist(ctx, sm_result.updated_state)
+
+        if sm_result.ready_tool_name:
+            logger.info(
+                "workflow.completed session_id=%s tool=%s",
+                ctx.session_id,
+                sm_result.ready_tool_name,
+            )
+            if sm_result.clear_state:
+                await self._memory.clear_workflow_state(ctx)
+                await self._memory.clear_pending_intent(ctx)
+            return WorkflowContinueResult(
+                handled=True,
+                execute_tool=sm_result.ready_tool_name,
+                execute_arguments=dict(sm_result.ready_arguments or {}),
+            )
+
+        if sm_result.assistant_message:
+            return WorkflowContinueResult(handled=True, message=sm_result.assistant_message)
+
+        if sm_result.updated_state and not sm_result.updated_state.pending_slots:
+            return WorkflowContinueResult(
+                handled=True,
+                message=format_draft_summary(sm_result.updated_state.slots),
+            )
+
+        return WorkflowContinueResult(handled=False)

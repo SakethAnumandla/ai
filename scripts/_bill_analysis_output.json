@@ -1,0 +1,86 @@
+﻿{
+  "manual_fields_from_pdf": {
+    "provider": "Bharti Airtel Limited",
+    "one_airtel_id": "10101032375955",
+    "customer_name": "MOHAMMED KHWAJA NIZAMUDDIN",
+    "registered_email": "mknizam16@gmail.com",
+    "registered_mobile": "9441482605",
+    "plan": "One Airtel Plan",
+    "statement_date": "12 May 2026",
+    "statement_period": "11 Apr 2026 - 10 May 2026",
+    "total_amount_payable_inr": 4562.28,
+    "due_date": "Immediately",
+    "wifi_id": "04013099203_dsl",
+    "fixedline_number": "04048961836",
+    "account_no": "20006240641",
+    "bill_no": "HF2736I001296851",
+    "bill_date": "12 May 2026",
+    "connections": "4",
+    "amazon_prime_wifi_charge_inr": "06",
+    "correct_category": {
+      "main_category": "bills",
+      "sub_category": "mobile",
+      "transaction_type": "expense"
+    }
+  },
+  "ocr_amount_mismatch": {
+    "ocr_parsed_total": 798.0,
+    "correct_total_payable": 4562.28
+  },
+  "ocr_extraction": {
+    "file": "e:\\Downloads\\10101032375955_May2026.pdf",
+    "vendor_name": null,
+    "restaurant_name": null,
+    "customer_name": "infinity",
+    "bill_number": "HF2736I001296851",
+    "bill_date": "2026-05-12 00:00:00",
+    "due_date": null,
+    "subtotal": null,
+    "total_amount": 798.0,
+    "tax_amount": null,
+    "tax_breakdown": {},
+    "discount_amount": null,
+    "payment_method": "cash",
+    "payment_status": null,
+    "payment_transaction_id": null,
+    "vendor_gst": null,
+    "vendor_address": null,
+    "confidence_score": 65.0,
+    "classification": {
+      "transaction_type": "expense",
+      "main_category": "shopping",
+      "sub_category": "electronics",
+      "classification_confidence": 100.0,
+      "income_score": 10,
+      "expense_score": 54
+    },
+    "transaction_type": "expense",
+    "main_category": "shopping",
+    "sub_category": "electronics",
+    "raw_text_length": 18792,
+    "raw_text_preview": "Above values are tax exclusive\nMOHAMMED KHWAJA NIZAMUDDIN\nRegistered Email:\nmknizam16@gmail.com\nRegistered Telephone Number (RTN):\n9441482605\nYour Plan:\nOne Airtel Plan\nOne Airtel ID\n10101032375955\nNumber of connections\n4\nStatement Date\n12 May 2026\nStatement Period\n11 Apr 2026 - 10 May 2026\nTotal Amount Payable:\n\u20b9 4,562.28\nDue Date:\nImmediately\nPay via\nAirtel Thanks App\nwww.airtel.in/pay\nScan and pay via any UPI apps\nPowered by \u00a0\nLast bill amount Payment made Payment Coupon Credits This Month's Charges Total Amount Amount after\ndue date (Immediately)\n\u20b9 1,383.62 - \u20b9 1,283.62 - \u20b9 100.00 - \u20b9 0.00 + \u20b9 4,562.28 = \u20b9 4,562.28 \u20b9 4,916.28\nThis Month's Summary (Amounts in \u20b9 )\nServices Connections Plan/Pack Charges Other Charges Total\nOne Airtel Plan - 10101032375955 4 2596.0 1,499.00 4,095.00\nTaxes - - - 467.28\nThis month's charges 4,562.28\nLast Bill Amount - - - 1,383.62\nLast Payment Made - - - 1,283.62\nPayment via Airtel Pay (Coupon Redemption) - - - 100.00\nTOTAL \u20b9 4,562.28\nTotal: Four Thousand Five Hundred Sixty Two Rupees And Twenty Eight Paise Only\nChanges This Month\nServices Details Amount ( \u20b9 )\nOther Charges\nWi-Fi : 04013099203_dsl Amazon Prime (Yearly Membership) charged on 06 May 2026 1270.34\nTotal 1270.34\nDetailed break-up of above charges can be found in bill\nBills & Payments Summary\nMonth Previous Dues (A) Payments (B) PaymentCoupon (C) Credits (D) This Month's Charges(E) Total Amount (A+B+C+D+E)\nMay'26 1,383.62 -1,283.62 -100.00 0.00 4,562.28 4,562.28\nApr'26 2,363.54 -2,796.82 0.00 0.00 1,816.90 1,383.62\nAll above values are inclusive of tax\nOne Airtel Monthly Statement\n\nFIXEDLINE AND Wi-Fi SERVICES\nOriginal Copy for Recipient provided by  Bharti Airtel Limited- Tax Invoice\nFixedline number :  04048961836 / Wi-Fi ID :  04013099203_dsl\nBilling Address\n \nMOHAMMED KHWAJA NIZAMUDDIN\nPlot No 263,Defence\nColony,,Sainikpuri,,Hyderabad,Telengana,500094 Hyderabad\nTelangana,\n500094\nEmail id : mknizam16@gmail.com\nPhoneNo:9441482605\nHF2736I001296851                           20006240641\nShip To State Code : 36 Place of Supply : Telangana\n \nAccount\n \nAccount No 20006240641\nBill Period 11 Apr 2026 to 10 May 2026\nBill NO HF2736I001296851\nBill Date 12 May 2026\nDue date 22 May 2026\nCredit limit 2400.00\nSecurity deposit 0.00\n \n \nLast bill amount Payment made Payment Coupon Credits This month's charges Total Amount Amount after due\ndate(22May)\n` 1178.82 - ` 1178.82 - ` 0.00 - ` 0.00 + ` 2677.82 = ` 2677.82 ` 2795.82\n \nThis Month's Charges Charges( ` )\n \nRental Charges 999.00\nTaxes 179.82\nTotal Amount ` 1178.82\nOther Charges - Third party content charges (incl taxes) ` 1499.00\nGrand Total (`) ` 2677.82\nTotal:Two Thousand Six Hundred Seventy Seven Rupees and Eighty Two Paise Only\n \nDetailed breakup of these charges can be found on next page\nSend payment to\n20006240641.FL@mairtel\nScan & pay via any UPI Apps\nPowered by\nFor Bharti Airtel Limited\nVasim Unissa S,\nHead - Experience Operations (VP)\nPage 1 of 2\nYOUR CHARGES IN DETAIL\nRelationship No  : 20006240641\n Paymen"
+  },
+  "policy": {
+    "created_new": false,
+    "id": 5,
+    "policy_id": "POL-MOBILE-WIFI-5000",
+    "policy_name": "Mobile & WiFi Bills Reimbursement 2026",
+    "maximum_amount": 5000.0,
+    "sub_category": "bills",
+    "policy_type": "utilities",
+    "expense_category_mapping": "bills"
+  },
+  "reimbursement_check": {
+    "bill_amount_used": 4562.28,
+    "amount_source": "manual_parse_total_amount_payable",
+    "policy_active": {
+      "is_valid": true,
+      "reason": null
+    },
+    "over_policy_limit": false,
+    "calculated_approved_amount": 4562.28,
+    "matches_mobile_wifi_scope": true,
+    "verdict": "YES_PENDING_APPROVAL",
+    "reason": "Amount 4562.28 is within policy limit 5000.0. Approved amount would be 4562.28 after dept head + manager approval."
+  }
+}

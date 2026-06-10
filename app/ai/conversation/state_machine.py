@@ -1,0 +1,528 @@
+"""Multi-turn slot filling for expense workflows without extra GPT calls."""
+import logging
+import re
+from datetime import datetime
+from typing import Any, Dict, List, Optional
+
+logger = logging.getLogger(__name__)
+
+from app.ai.conversation.expense_intent import describes_new_expense
+from app.ai.vendor_guard import looks_like_chat_command
+from app.ai.schemas.memory import DraftExpenseContext
+from app.ai.schemas.workflow import (
+    ConversationWorkflowState,
+    StateMachineResult,
+    WorkflowScope,
+    WorkflowType,
+)
+from app.ai.tools.argument_repair import _coerce_float, _coerce_int
+from app.ai.tools.expense_create_enrichment import bill_name_needs_repair
+from app.ai.expense_extraction import user_description_from_message
+from app.ai.workflow.entity_extractor import ExpenseEntityExtractor
+# sub_category is inferred for food (never asked) — avoids UPI/cash being misread as category
+_SLOT_ORDER = ["bill_amount", "vendor_name", "payment_method", "main_category"]
+
+_SLOT_QUESTIONS = {
+    "bill_amount": "What was the amount?",
+    "vendor_name": "Which merchant or vendor was this with?",
+    "payment_method": "How was this paid? (e.g. UPI, credit card, cash)",
+    "main_category": "Which category should I use? (e.g. travel, food, miscellaneous)",
+    "sub_category": (
+        "What type of food expense is this? "
+        "(e.g. restaurant, dining, cafe, office lunch, groceries)"
+    ),
+}
+
+# OCR / receipt field names → workflow slot names
+_OCR_FIELD_TO_SLOT = {
+    "merchant": "vendor_name",
+    "total": "bill_amount",
+    "invoice_date": "bill_date",
+    "invoice_id": "bill_number",
+}
+
+_SKIP_PENDING_SLOTS = frozenset({"human_review", "bill_date", "bill_number"})
+
+
+def _sanitize_sub_category(
+    main_category: Optional[str],
+    sub_category: Optional[str],
+    **kwargs,
+):
+    from app.ai.workflow.slot_parser import sanitize_sub_category
+
+    return sanitize_sub_category(main_category, sub_category, **kwargs)
+
+
+def _infer_food_sub_category(**kwargs):
+    from app.ai.workflow.slot_parser import infer_food_sub_category
+
+    return infer_food_sub_category(**kwargs)
+
+
+def normalize_workflow_pending_slots(fields: List[str]) -> List[str]:
+    """Map receipt OCR field labels to conversation slot keys."""
+    out: List[str] = []
+    valid = set(_SLOT_QUESTIONS.keys())
+    for raw in fields:
+        if raw in _SKIP_PENDING_SLOTS:
+            continue
+        slot = _OCR_FIELD_TO_SLOT.get(raw, raw)
+        if slot in valid:
+            out.append(slot)
+    return list(dict.fromkeys(out))
+
+
+def slot_question(slot: str) -> str:
+    return _SLOT_QUESTIONS.get(
+        slot,
+        f"Could you confirm the {slot.replace('_', ' ')}?",
+    )
+
+_CREATE_PATTERNS = [
+    re.compile(r"\b(add|create|log|record|save)\b.*\b(expense|bill|receipt)\b", re.I),
+    re.compile(r"\b(save|add|log|record)\s+it\s+to\s+(?:the\s+)?expense", re.I),
+    re.compile(r"\b(travel|lunch|dinner|food|uber|cab|hotel)\s+expense\b", re.I),
+    re.compile(r"\bhelp\s+me\s+log\b", re.I),
+    re.compile(r"\b(log|record)\s+it\b", re.I),
+    re.compile(r"\bhad\s+(lunch|dinner|breakfast|brunch)\b", re.I),
+    re.compile(r"\bwent\s+for\b.*\b(?:hotel|restaurant)\b", re.I),
+]
+
+_IMMEDIATE_SUBMIT_RE = re.compile(
+    r"\b(?:submit|send)\b(?:\s+it)?\s+for\s+approval\b"
+    r"|\bsubmit\s+(?:this|the)\s+expense\b"
+    r"|\bsubmit\s+for\s+approval\b",
+    re.I,
+)
+
+_SUBMIT_CONFIRM_SLOT = "_awaiting_submit_confirm"
+
+_CONTINUE_PATTERNS = [
+    re.compile(r"\bcontinue\b.*\b(expense|draft)\b", re.I),
+    re.compile(r"\bresume\b.*\b(expense|draft)\b", re.I),
+]
+
+_PAYMENT_ALIASES = {
+    "upi": "upi",
+    "credit": "credit_card",
+    "credit card": "credit_card",
+    "debit": "debit_card",
+    "cash": "cash",
+    "wallet": "wallet",
+    "net banking": "net_banking",
+}
+
+
+def _extract_expense_label(text: str) -> Optional[str]:
+    m = re.search(
+        r"\b(?:add|create|log|record)\s+(?:a\s+)?(.+?)\s+expense\b",
+        text,
+        re.I,
+    )
+    if m:
+        return m.group(1).strip()
+    m = re.search(r"\b(travel|lunch|dinner|food)\s+expense\b", text, re.I)
+    if m:
+        return m.group(1).strip()
+    lowered = text.lower()
+    for meal in ("lunch", "dinner", "breakfast", "brunch"):
+        if re.search(rf"\bhad\s+{meal}\b", lowered) or f" {meal} " in f" {lowered} ":
+            return meal.capitalize()
+    return None
+
+
+def _parse_payment(value: str) -> Optional[str]:
+    v = value.strip().lower()
+    for alias, canonical in _PAYMENT_ALIASES.items():
+        if alias in v:
+            return canonical
+    return None
+
+
+class ConversationStateMachine:
+    """Stateful field collection for expense create / continue flows."""
+
+    def should_start_create(self, text: str) -> bool:
+        return any(p.search(text) for p in _CREATE_PATTERNS)
+
+    def _recompute_pending_slots(self, slots: Dict[str, Any]) -> List[str]:
+        pending = [s for s in _SLOT_ORDER if slots.get(s) in (None, "", [])]
+        pending = self._maybe_require_sub_category(slots, pending)
+        return [s for s in pending if slots.get(s) in (None, "", [])]
+
+    def _merge_entities_from_message(
+        self,
+        state: ConversationWorkflowState,
+        text: str,
+        *,
+        entities: Optional[Any] = None,
+    ) -> Dict[str, Any]:
+        """Extract from the full utterance and merge into workflow before any slot question."""
+        if entities is None:
+            entities = ExpenseEntityExtractor().extract(text)
+        extracted = entities.to_slot_prefill()
+
+        from app.ai.workflow.slot_parser import parse_slot_updates
+
+        for k, v in parse_slot_updates(text).items():
+            if k.endswith("_raw") or v is None:
+                continue
+            if k not in extracted or extracted.get(k) in (None, "", []):
+                extracted[k] = v
+
+        logger.info("EXTRACTED ENTITIES=%s", extracted)
+
+        for k, v in extracted.items():
+            if v is not None and state.slots.get(k) in (None, "", []):
+                state.slots[k] = v
+
+        desc = user_description_from_message(text)
+        if desc and not state.slots.get("description"):
+            state.slots["description"] = desc
+        if entities.bill_name and not state.slots.get("description"):
+            state.slots["description"] = entities.bill_name
+
+        label = state.slots.get("bill_name")
+        if bill_name_needs_repair(label) and entities.bill_name:
+            state.slots["bill_name"] = entities.bill_name
+        elif bill_name_needs_repair(label) and state.slots.get("vendor_name"):
+            state.slots["bill_name"] = state.slots["vendor_name"]
+
+        self._apply_food_sub_category_inference(state.slots)
+        state.pending_slots = self._recompute_pending_slots(state.slots)
+        logger.info("WORKFLOW BEFORE QUESTION=%s", state.model_dump())
+        logger.info("MISSING FIELDS=%s", state.pending_slots)
+        state.updated_at = datetime.utcnow()
+        return extracted
+
+    def start_expense_create(
+        self,
+        text: str,
+        *,
+        session_id: Optional[str] = None,
+        prefill: Optional[Dict[str, Any]] = None,
+    ) -> ConversationWorkflowState:
+        entities = ExpenseEntityExtractor().extract(text)
+        label = _extract_expense_label(text) or entities.bill_name or "expense"
+        if bill_name_needs_repair(label) and entities.bill_name:
+            label = entities.bill_name
+        slots: Dict[str, Any] = {
+            "bill_name": label,
+            "_source_utterance": text.strip(),
+        }
+        if prefill:
+            for k, v in prefill.items():
+                if v is None:
+                    continue
+                if k == "sub_category":
+                    mapped = _sanitize_sub_category(
+                        prefill.get("main_category") or slots.get("main_category"),
+                        v,
+                        vendor_name=prefill.get("vendor_name") or slots.get("vendor_name"),
+                        bill_name=prefill.get("bill_name") or slots.get("bill_name"),
+                    )
+                    if mapped:
+                        slots["sub_category"] = mapped
+                    continue
+                slots[k] = v
+
+        state = ConversationWorkflowState(
+            workflow_type=WorkflowType.EXPENSE_CREATE,
+            scope=WorkflowScope.EXPENSE,
+            slots=slots,
+            pending_slots=list(_SLOT_ORDER),
+            session_id=session_id,
+        )
+        self._merge_entities_from_message(state, text, entities=entities)
+        return state
+
+    def start_from_draft(self, draft: DraftExpenseContext, *, session_id: Optional[str] = None) -> ConversationWorkflowState:
+        slots: Dict[str, Any] = {
+            "bill_name": draft.bill_name or "expense",
+            "bill_amount": draft.bill_amount,
+            "vendor_name": draft.vendor_name,
+            "main_category": draft.main_category,
+            "sub_category": draft.sub_category,
+        }
+        if draft.expense_id:
+            slots["expense_id"] = draft.expense_id
+        if draft.fields_pending:
+            pending = normalize_workflow_pending_slots(draft.fields_pending)
+        else:
+            pending = [s for s in _SLOT_ORDER if slots.get(s) in (None, "")]
+        pending = [s for s in pending if slots.get(s) in (None, "")]
+        if not pending:
+            pending = [s for s in _SLOT_ORDER if slots.get(s) in (None, "")]
+        return ConversationWorkflowState(
+            workflow_type=WorkflowType.EXPENSE_CONTINUE,
+            scope=WorkflowScope.EXPENSE,
+            slots=slots,
+            pending_slots=pending,
+            expense_id=draft.expense_id,
+            session_id=session_id,
+        )
+
+    def _apply_food_sub_category_inference(self, slots: Dict[str, Any]) -> None:
+        """Infer food sub_category once vendor/label are known — never ask in chat."""
+        if (slots.get("main_category") or "").lower() != "food":
+            return
+        if slots.get("sub_category"):
+            mapped = _sanitize_sub_category(
+                "food",
+                slots["sub_category"],
+                vendor_name=slots.get("vendor_name"),
+                bill_name=slots.get("bill_name"),
+            )
+            if mapped:
+                slots["sub_category"] = mapped
+            else:
+                slots.pop("sub_category", None)
+        inferred = _infer_food_sub_category(
+            vendor_name=slots.get("vendor_name"),
+            bill_name=slots.get("bill_name"),
+        )
+        if inferred:
+            slots["sub_category"] = inferred
+
+    def _maybe_require_sub_category(
+        self, slots: Dict[str, Any], pending: List[str]
+    ) -> List[str]:
+        self._apply_food_sub_category_inference(slots)
+        return [s for s in pending if s != "sub_category"]
+
+    def _try_fill_slot(
+        self, slot: str, text: str, *, slots: Optional[Dict[str, Any]] = None
+    ) -> Optional[Any]:
+        stripped = text.strip()
+        ctx = slots or {}
+        if slot == "bill_amount":
+            val = _coerce_float(stripped)
+            return val if val and val > 0 else None
+        if slot == "vendor_name":
+            if looks_like_chat_command(stripped):
+                return None
+            if len(stripped) >= 2 and not stripped.isdigit() and len(stripped.split()) <= 5:
+                return stripped
+            return None
+        if slot == "payment_method":
+            return _parse_payment(stripped)
+        if slot == "main_category":
+            if len(stripped) >= 2:
+                return stripped.lower().replace(" ", "_")
+            return None
+        if slot == "sub_category":
+            from app.ai.workflow.slot_parser import is_payment_method_text
+
+            if is_payment_method_text(stripped):
+                return None
+            if len(stripped) >= 2 and not stripped.isdigit():
+                return _sanitize_sub_category(
+                    ctx.get("main_category"),
+                    stripped,
+                    vendor_name=ctx.get("vendor_name"),
+                    bill_name=ctx.get("bill_name"),
+                )
+            return None
+        return None
+
+    def _wants_immediate_submit(self, text: str) -> bool:
+        return bool(_IMMEDIATE_SUBMIT_RE.search(text or ""))
+
+    def _offer_submit_confirmation(
+        self, state: ConversationWorkflowState, text: str
+    ) -> StateMachineResult:
+        """All slots filled — ask to submit unless user already asked to submit now."""
+        if self._wants_immediate_submit(text):
+            return self._complete(state, submit_now=True)
+        state.slots[_SUBMIT_CONFIRM_SLOT] = True
+        from app.ai.workflow.draft_summary import format_draft_summary
+
+        return StateMachineResult(
+            handled=True,
+            assistant_message=format_draft_summary(state.slots, intro="Got it 👍"),
+            updated_state=state,
+            clear_state=False,
+        )
+
+    def _handle_pending_submit_reply(
+        self, state: ConversationWorkflowState, text: str
+    ) -> Optional[StateMachineResult]:
+        if not state.slots.get(_SUBMIT_CONFIRM_SLOT):
+            return None
+        from app.ai.confirmation.affirm import is_denial, is_submit_confirmation
+
+        if is_submit_confirmation(text):
+            state.slots.pop(_SUBMIT_CONFIRM_SLOT, None)
+            return self._complete(state, submit_now=True)
+        if is_denial(text):
+            state.slots.pop(_SUBMIT_CONFIRM_SLOT, None)
+            return StateMachineResult(
+                handled=True,
+                assistant_message="Okay — I won't submit that expense. Say what you'd like to log next.",
+                updated_state=None,
+                clear_state=True,
+            )
+        return None
+
+    def process_turn(
+        self,
+        text: str,
+        state: Optional[ConversationWorkflowState],
+        *,
+        session_id: Optional[str] = None,
+        prefill: Optional[Dict[str, Any]] = None,
+    ) -> StateMachineResult:
+        if state is None and (self.should_start_create(text) or describes_new_expense(text)):
+            state = self.start_expense_create(text, session_id=session_id, prefill=prefill)
+            if not state.pending_slots:
+                return self._offer_submit_confirmation(state, text)
+            next_slot = state.pending_slots[0] if state.pending_slots else None
+            if next_slot:
+                logger.info(
+                    "asking slot=%s after first-turn merge pending=%s",
+                    next_slot,
+                    state.pending_slots,
+                )
+            return StateMachineResult(
+                handled=True,
+                assistant_message=slot_question(next_slot) if next_slot else None,
+                updated_state=state,
+            )
+
+        if state is None:
+            return StateMachineResult(handled=False)
+
+        pending_submit = self._handle_pending_submit_reply(state, text)
+        if pending_submit is not None:
+            return pending_submit
+
+        self._merge_entities_from_message(state, text)
+
+        if prefill:
+            for k, v in prefill.items():
+                if v is None or state.slots.get(k) is not None:
+                    continue
+                if k == "sub_category":
+                    mapped = _sanitize_sub_category(
+                        prefill.get("main_category") or state.slots.get("main_category"),
+                        v,
+                        vendor_name=prefill.get("vendor_name") or state.slots.get("vendor_name"),
+                        bill_name=prefill.get("bill_name") or state.slots.get("bill_name"),
+                    )
+                    if mapped:
+                        state.fill_slot(k, mapped)
+                    continue
+                state.fill_slot(k, v)
+
+        from app.ai.workflow.slot_parser import is_payment_method_text
+
+        while state.pending_slots:
+            slot = state.pending_slots[0]
+            if (
+                slot != "payment_method"
+                and is_payment_method_text(text)
+                and not state.slots.get("payment_method")
+            ):
+                pay = _parse_payment(text)
+                if pay:
+                    state.fill_slot("payment_method", pay)
+                    self._apply_food_sub_category_inference(state.slots)
+                    continue
+            value = self._try_fill_slot(slot, text, slots=state.slots)
+            if value is None:
+                if slot == state.pending_slots[0] and len(text.split()) <= 6:
+                    logger.info(
+                        "asking slot=%s short_reply=%r workflow=%s",
+                        slot,
+                        text[:80],
+                        state.slots,
+                    )
+                    return StateMachineResult(
+                        handled=True,
+                        assistant_message=slot_question(slot),
+                        updated_state=state,
+                    )
+                break
+            state.fill_slot(slot, value)
+            self._apply_food_sub_category_inference(state.slots)
+
+        if not state.pending_slots:
+            return self._offer_submit_confirmation(state, text)
+
+        next_slot = state.pending_slots[0]
+        logger.info(
+            "asking slot=%s after turn merge pending=%s slots=%s",
+            next_slot,
+            state.pending_slots,
+            state.slots,
+        )
+        return StateMachineResult(
+            handled=True,
+            assistant_message=slot_question(next_slot),
+            updated_state=state,
+        )
+
+    def _complete(
+        self, state: ConversationWorkflowState, *, submit_now: bool = False
+    ) -> StateMachineResult:
+        if not state.slots.get("bill_amount"):
+            if "bill_amount" not in state.pending_slots:
+                state.pending_slots.insert(0, "bill_amount")
+            return StateMachineResult(
+                handled=True,
+                assistant_message=slot_question("bill_amount"),
+                updated_state=state,
+            )
+
+        self._apply_food_sub_category_inference(state.slots)
+        args = dict(state.slots)
+        for internal in (_SUBMIT_CONFIRM_SLOT, "_source_utterance"):
+            args.pop(internal, None)
+        bill_name = args.pop("bill_name", "expense")
+        payment_method = args.pop("payment_method", None)
+        if bill_name_needs_repair(bill_name) and args.get("vendor_name"):
+            bill_name = str(args["vendor_name"])
+        sub = _sanitize_sub_category(
+            args.get("main_category"),
+            args.get("sub_category"),
+            vendor_name=args.get("vendor_name"),
+            bill_name=bill_name,
+        )
+        tool_args = {
+            "bill_name": bill_name,
+            "bill_amount": args.get("bill_amount"),
+            "vendor_name": args.get("vendor_name"),
+            "main_category": args.get("main_category"),
+            "save_as_draft": not submit_now,
+        }
+        if payment_method:
+            tool_args["payment_method"] = payment_method
+        if sub:
+            tool_args["sub_category"] = sub
+        if args.get("description"):
+            tool_args["description"] = args["description"]
+        if state.expense_id:
+            tool_args["expense_id"] = state.expense_id
+
+        return StateMachineResult(
+            handled=True,
+            ready_tool_name="expense.create.v1",
+            ready_arguments={k: v for k, v in tool_args.items() if v is not None},
+            updated_state=state,
+            clear_state=True,
+        )
+
+    def state_to_draft(self, state: ConversationWorkflowState) -> DraftExpenseContext:
+        return DraftExpenseContext(
+            expense_id=state.expense_id,
+            bill_name=state.slots.get("bill_name"),
+            bill_amount=state.slots.get("bill_amount"),
+            vendor_name=state.slots.get("vendor_name"),
+            payment_method=state.slots.get("payment_method"),
+            main_category=state.slots.get("main_category"),
+            sub_category=state.slots.get("sub_category"),
+            source_utterance=state.slots.get("_source_utterance")
+            or state.slots.get("description"),
+            fields_pending=list(state.pending_slots),
+        )

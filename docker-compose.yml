@@ -1,0 +1,108 @@
+# Backend + Redis. Database: Aiven Postgres via .env DATABASE_URL
+# Optional local Postgres: docker compose --profile local up -d
+# pgAdmin UI:          python scripts/setup_pgadmin.py  → http://localhost:5050/
+
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+  backend:
+    build: .
+    platform: linux/amd64
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      # Local Docker Postgres (profile `local`). Aiven in .env fails when offline/DNS blocked.
+      DATABASE_URL: postgresql://user:password@postgres:5432/expense_tracker
+      REDIS_ENABLED: "true"
+      REDIS_URL: redis://redis:6379
+      DB_POOL_SIZE: "2"
+      DB_MAX_OVERFLOW: "1"
+      DB_POOL_RECYCLE: "1800"
+      PADDLE_OCR_PRELOAD: "false"
+      PADDLE_OCR_FAST_MODE: "true"
+      PADDLE_OCR_MAX_PASSES_CLEAR: "4"
+      PADDLE_OCR_MAX_PASSES_BLURRY: "7"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    volumes:
+      - ./uploads:/app/uploads
+      # Live code for AI/chat fixes without full image rebuild (rebuild still needed for deps)
+      - ./app:/app/app
+      - ./scripts:/app/scripts
+      - ./tests:/app/tests
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import json,urllib.request; r=urllib.request.urlopen('http://127.0.0.1:8000/health'); d=json.load(r); assert d.get('database',{}).get('ok')"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
+
+  celery_worker:
+    profiles: ["workers"]
+    build: .
+    platform: linux/amd64
+    command: celery -A app.intelligence.tasks.celery_app:celery_app worker --loglevel=info -Q celery --concurrency=2
+    env_file:
+      - .env
+    environment:
+      CELERY_WORKER: "1"
+      REDIS_ENABLED: "true"
+      REDIS_URL: redis://redis:6379
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
+    depends_on:
+      redis:
+        condition: service_started
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Only when you want a local DB instead of Aiven:
+  postgres:
+    profiles: ["local"]
+    image: postgres:15
+    environment:
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: expense_tracker
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U user -d expense_tracker"]
+      interval: 3s
+      timeout: 5s
+      retries: 10
+
+  # Web DB browser — http://localhost:5050/ (run scripts/setup_pgadmin.py first)
+  pgadmin:
+    profiles: ["tools"]
+    image: dpage/pgadmin4:8.14
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_EMAIL:-admin@expense.com}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD:-admin}
+      PGADMIN_CONFIG_SERVER_MODE: "False"
+      PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED: "False"
+    ports:
+      - "5050:80"
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+      - ./docker/pgadmin/servers.json:/pgadmin4/servers.json:ro
+      - ./docker/pgadmin/pgpass:/pgpass:ro
+    restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+volumes:
+  postgres_data:
+  pgadmin_data:
