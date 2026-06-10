@@ -16,8 +16,8 @@ services:
     env_file:
       - .env
     environment:
-      # Local Docker Postgres (profile `local`). Aiven in .env fails when offline/DNS blocked.
-      DATABASE_URL: postgresql://user:password@postgres:5432/expense_tracker
+      # DATABASE_URL comes from .env (Aiven). For local Postgres use profile `local` and
+      # set DATABASE_URL=postgresql://user:password@postgres:5432/expense_tracker in .env.
       REDIS_ENABLED: "true"
       REDIS_URL: redis://redis:6379
       DB_POOL_SIZE: "2"
@@ -28,8 +28,6 @@ services:
       PADDLE_OCR_MAX_PASSES_CLEAR: "4"
       PADDLE_OCR_MAX_PASSES_BLURRY: "7"
     depends_on:
-      postgres:
-        condition: service_healthy
       redis:
         condition: service_started
     volumes:
