@@ -1,6 +1,7 @@
 """Generate Postman Collection v2.1 for all Bizwy Expense API routes."""
 from __future__ import annotations
 
+import argparse
 import json
 import sys
 import uuid
@@ -17,9 +18,11 @@ ENV_PATH = OUT_DIR / "Bizwy_Expense_API.postman_environment.json"
 
 SKIP_PATHS = frozenset({"/docs", "/docs/oauth2-redirect", "/openapi.json", "/redoc"})
 
+DEFAULT_BASE_URL = "http://localhost:8000"
+
 # Collection variables — run `python scripts/seed_api_data.py` and paste printed IDs here.
 COLLECTION_VARS = [
-    ("base_url", "http://localhost:8000"),
+    ("base_url", DEFAULT_BASE_URL),
     ("session_id", "api-test-session01"),
     ("expense_draft_id", "1"),
     ("expense_submitted_id", "2"),
@@ -448,7 +451,12 @@ def _build_request(method: str, path: str) -> Dict[str, Any]:
     return request
 
 
-def _build_collection(routes: List[Tuple[str, str]]) -> Dict[str, Any]:
+def _build_collection(
+    routes: List[Tuple[str, str]],
+    *,
+    base_url: str,
+    env_name: str,
+) -> Dict[str, Any]:
     folders: Dict[str, List[Dict[str, Any]]] = {}
     for method, path in routes:
         folder = _folder_name(path)
@@ -467,34 +475,39 @@ def _build_collection(routes: List[Tuple[str, str]]) -> Dict[str, Any]:
             continue
         items.append({"name": name, "item": folders[name]})
 
+    collection_vars = [(k, base_url if k == "base_url" else v) for k, v in COLLECTION_VARS]
+
     return {
         "info": {
             "_postman_id": str(uuid.uuid4()),
             "name": "Bizwy Expense API",
             "description": (
                 "Complete Postman collection for Bizwy Expense Backend.\n\n"
+                f"**Base URL:** `{base_url}`\n"
+                f"**Environment:** {env_name}\n\n"
                 "**Setup:**\n"
-                "1. Import this collection and the environment file.\n"
-                "2. Start backend: `docker compose --profile local up -d`\n"
-                "3. Seed IDs: `docker exec bizwy_expense_backend_new-main-backend-1 python scripts/seed_api_data.py`\n"
-                "4. Copy printed IDs into collection/environment variables.\n"
-                "5. No auth required — dev user is auto-used.\n\n"
-                "**Note:** OCR/upload requests use `scripts/fixtures/bhagini_receipt.png`."
+                "1. Import this collection and the environment file into Postman.\n"
+                "2. Select the environment from the top-right dropdown.\n"
+                "3. Run **GET /health** to confirm the API is reachable.\n"
+                "4. No auth required — dev user is auto-used on this backend.\n\n"
+                "**Note:** OCR/upload requests reference `scripts/fixtures/bhagini_receipt.png` "
+                "when testing file uploads locally."
             ),
             "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
         },
-        "variable": [{"key": k, "value": v, "type": "string"} for k, v in COLLECTION_VARS],
+        "variable": [{"key": k, "value": v, "type": "string"} for k, v in collection_vars],
         "item": items,
     }
 
 
-def _build_environment() -> Dict[str, Any]:
+def _build_environment(*, base_url: str, env_name: str) -> Dict[str, Any]:
+    collection_vars = [(k, base_url if k == "base_url" else v) for k, v in COLLECTION_VARS]
     return {
         "id": str(uuid.uuid4()),
-        "name": "Bizwy Expense API (Local)",
+        "name": env_name,
         "values": [
             {"key": k, "value": v, "type": "default", "enabled": True}
-            for k, v in COLLECTION_VARS
+            for k, v in collection_vars
         ],
         "_postman_variable_scope": "environment",
         "_postman_exported_at": datetime.now(timezone.utc).isoformat(),
@@ -502,15 +515,33 @@ def _build_environment() -> Dict[str, Any]:
     }
 
 
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Generate Postman collection and environment JSON.")
+    parser.add_argument(
+        "--base-url",
+        default=DEFAULT_BASE_URL,
+        help="API base URL (no trailing slash), e.g. https://backend-new-1-z0zd.onrender.com",
+    )
+    parser.add_argument(
+        "--env-name",
+        default="Bizwy Expense API (Local)",
+        help="Postman environment display name",
+    )
+    return parser.parse_args()
+
+
 def main() -> int:
+    args = _parse_args()
+    base_url = args.base_url.rstrip("/")
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     routes = _collect_routes()
-    collection = _build_collection(routes)
-    env = _build_environment()
+    collection = _build_collection(routes, base_url=base_url, env_name=args.env_name)
+    env = _build_environment(base_url=base_url, env_name=args.env_name)
 
     COLLECTION_PATH.write_text(json.dumps(collection, indent=2), encoding="utf-8")
     ENV_PATH.write_text(json.dumps(env, indent=2), encoding="utf-8")
 
+    print(f"Base URL: {base_url}")
     print(f"Routes: {len(routes)}")
     print(f"Collection: {COLLECTION_PATH}")
     print(f"Environment: {ENV_PATH}")

@@ -1,14 +1,14 @@
 {
   "info": {
-    "_postman_id": "d57f1812-e7d4-4dd5-819c-8483420c3074",
+    "_postman_id": "ddde2571-9185-4e39-a4be-c875633f5cc1",
     "name": "Bizwy Expense API",
-    "description": "Complete Postman collection for Bizwy Expense Backend.\n\n**Setup:**\n1. Import this collection and the environment file.\n2. Start backend: `docker compose --profile local up -d`\n3. Seed IDs: `docker exec bizwy_expense_backend_new-main-backend-1 python scripts/seed_api_data.py`\n4. Copy printed IDs into collection/environment variables.\n5. No auth required \u2014 dev user is auto-used.\n\n**Note:** OCR/upload requests use `scripts/fixtures/bhagini_receipt.png`.",
+    "description": "Complete Postman collection for Bizwy Expense Backend.\n\n**Base URL:** `https://backend-new-1-z0zd.onrender.com`\n**Environment:** Bizwy Expense API (Render Production)\n\n**Setup:**\n1. Import this collection and the environment file into Postman.\n2. Select the environment from the top-right dropdown.\n3. Run **GET /health** to confirm the API is reachable.\n4. No auth required \u2014 dev user is auto-used on this backend.\n\n**Note:** OCR/upload requests reference `scripts/fixtures/bhagini_receipt.png` when testing file uploads locally.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "variable": [
     {
       "key": "base_url",
-      "value": "http://localhost:8000",
+      "value": "https://backend-new-1-z0zd.onrender.com",
       "type": "string"
     },
     {
@@ -912,7 +912,7 @@
             },
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"bill_name\": \"Resubmitted expense\",\n  \"bill_amount\": 420.0,\n  \"bill_date\": \"2026-06-10T04:14:00.742371+00:00\",\n  \"main_category\": \"miscellaneous\",\n  \"confirm_submit\": true\n}",
+              "raw": "{\n  \"bill_name\": \"Resubmitted expense\",\n  \"bill_amount\": 420.0,\n  \"bill_date\": \"2026-06-10T05:16:25.679650+00:00\",\n  \"main_category\": \"miscellaneous\",\n  \"confirm_submit\": true\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -945,7 +945,7 @@
             },
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"bill_name\": \"Draft expense\",\n  \"bill_amount\": 420.0,\n  \"bill_date\": \"2026-06-10T04:14:00.742387+00:00\",\n  \"main_category\": \"miscellaneous\",\n  \"confirm_submit\": true\n}",
+              "raw": "{\n  \"bill_name\": \"Draft expense\",\n  \"bill_amount\": 420.0,\n  \"bill_date\": \"2026-06-10T05:16:25.679684+00:00\",\n  \"main_category\": \"miscellaneous\",\n  \"confirm_submit\": true\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -1682,7 +1682,7 @@
             },
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"policy_id\": \"POL-POSTMAN-001\",\n  \"policy_name\": \"Postman Test Policy\",\n  \"policy_type\": \"travel\",\n  \"maximum_amount\": 5000.0,\n  \"main_category\": \"policy\",\n  \"valid_from\": \"2026-06-10T04:14:00.742829+00:00\"\n}",
+              "raw": "{\n  \"policy_id\": \"POL-POSTMAN-001\",\n  \"policy_name\": \"Postman Test Policy\",\n  \"policy_type\": \"travel\",\n  \"maximum_amount\": 5000.0,\n  \"main_category\": \"policy\",\n  \"valid_from\": \"2026-06-10T05:16:25.681691+00:00\"\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -1731,7 +1731,7 @@
             },
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"policy_id\": \"POL-POSTMAN-002\",\n  \"policy_name\": \"Postman Test Policy 2\",\n  \"policy_type\": \"travel\",\n  \"maximum_amount\": 5000.0,\n  \"main_category\": \"policy\",\n  \"valid_from\": \"2026-06-10T04:14:00.742878+00:00\"\n}",
+              "raw": "{\n  \"policy_id\": \"POL-POSTMAN-002\",\n  \"policy_name\": \"Postman Test Policy 2\",\n  \"policy_type\": \"travel\",\n  \"maximum_amount\": 5000.0,\n  \"main_category\": \"policy\",\n  \"valid_from\": \"2026-06-10T05:16:25.681725+00:00\"\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -1999,7 +1999,7 @@
                 },
                 {
                   "key": "bill_date",
-                  "value": "2026-06-10T04:14:00.742058+00:00",
+                  "value": "2026-06-10T05:16:25.678768+00:00",
                   "type": "text"
                 }
               ]
