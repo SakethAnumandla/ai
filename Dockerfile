@@ -12,10 +12,8 @@ ENV FLAGS_use_mkldnn=0
 ENV MALLOC_ARENA_MAX=2
 ENV OMP_NUM_THREADS=1
 
-COPY requirements-ocr.txt requirements.txt requirements-dev.txt ./
-RUN pip install --no-cache-dir -r requirements-ocr.txt \
-    && pip install --no-cache-dir -r requirements.txt \
-    && pip install --no-cache-dir -r requirements-dev.txt \
+COPY requirements.txt ./
+RUN pip install --no-cache-dir -r requirements.txt \
     && pip install --no-cache-dir numpy==1.26.4
 
 COPY . .
