@@ -240,12 +240,11 @@ def build_expense_detail_response(
 ) -> ExpenseDetailResponse:
     base = build_expense_response(expense)
     remarks = approval_remarks_for_expense(expense)
-    return ExpenseDetailResponse(
-        **base.model_dump(),
-        ocr_details=ocr_bill_to_detail(ocr_bill) if ocr_bill else None,
-        remarks_table=remarks,
-        approval_remarks=remarks,
-    )
+    payload = base.model_dump()
+    payload["approval_remarks"] = remarks
+    payload["remarks_table"] = remarks
+    payload["ocr_details"] = ocr_bill_to_detail(ocr_bill) if ocr_bill else None
+    return ExpenseDetailResponse(**payload)
 
 
 def attach_files_to_expense(db, expense: Expense, processed_files: List[dict]) -> None:
