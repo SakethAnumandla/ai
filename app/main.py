@@ -1,6 +1,7 @@
 import asyncio
 import logging
 from contextlib import asynccontextmanager
+from urllib.parse import urlparse
 
 from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -33,11 +34,27 @@ def _warm_paddle_ocr() -> None:
         logger.warning("paddle_ocr.preload_failed: %s", exc)
 
 
+def _init_database_schema() -> None:
+    """Create tables if missing. Log and continue when DB is unreachable (e.g. bad Render env)."""
+    host = urlparse(settings.database_url).hostname or "(unknown)"
+    logger.info("database.connecting host=%s", host)
+    try:
+        Base.metadata.create_all(bind=engine)
+        logger.info("database.schema_ready host=%s", host)
+    except Exception as exc:
+        logger.error(
+            "database.schema_init_failed host=%s error=%s — "
+            "check DATABASE_URL in Render Environment (Aiven host must resolve)",
+            host,
+            exc,
+        )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     import os
 
-    Base.metadata.create_all(bind=engine)
+    _init_database_schema()
     if not os.getenv("TESTING"):
         loop = asyncio.get_running_loop()
         try:
