@@ -7,7 +7,7 @@ from typing import List, Optional
 from fastapi import HTTPException, UploadFile
 from sqlalchemy.orm import Session, joinedload
 
-from app.data.business_taxonomy import suggest_categories_from_text
+from app.data.business_taxonomy import normalize_taxonomy_fields, suggest_categories_from_text
 from app.models import Expense, ExpenseStatus, MainCategory, OCRBill, UploadMethod, User
 from app.schemas import BillDraftItem, BillPrefillData, ExpenseResponse
 from app.services.expense_access_service import ExpenseAccessService
@@ -15,6 +15,7 @@ from app.services.expense_approval_service import create_expense_approval_workfl
 from app.services.expense_service import ExpenseService
 from app.services.ocr_draft_service import (
     build_full_prefill_from_expense,
+    coerce_bill_prefill,
     create_manual_upload_draft,
     create_ocr_draft,
 )
@@ -116,12 +117,25 @@ class ManualExpenseService:
                     return build_expense_response(existing, is_duplicate=True)
 
         parsed_date = parse_bill_date(form.bill_date)
+        taxonomy = normalize_taxonomy_fields(
+            form.main_category.value,
+            form.sub_category,
+            form.line_item,
+        )
+        main_value = taxonomy["main_category"] or form.main_category.value
+        try:
+            resolved_main = MainCategory(main_value)
+        except ValueError:
+            resolved_main = form.main_category
+        resolved_sub = taxonomy["sub_category"]
+        resolved_line_item = taxonomy["line_item"]
+
         tag_list = normalize_hashtags_list(parse_hashtags_input(form.hashtags))
         if not tag_list:
-            manual = to_manual_category(form.main_category.value, form.sub_category)
+            manual = to_manual_category(resolved_main.value, resolved_sub)
             if manual != "miscellaneous":
                 tag_list = normalize_hashtags_list(
-                    get_hashtag_recommendations(manual, form.sub_category)["recommended"][:3]
+                    get_hashtag_recommendations(manual, resolved_sub)["recommended"][:3]
                 )
 
         from app.utils.expense_helpers import parse_payment_method
@@ -132,8 +146,8 @@ class ManualExpenseService:
             bill_amount=form.bill_amount,
             bill_date=parsed_date,
             transaction_type=force_expense_transaction_type(),
-            main_category=form.main_category,
-            sub_category=form.sub_category,
+            main_category=resolved_main,
+            sub_category=resolved_sub,
             description=form.description,
             payment_method=parse_payment_method(form.payment_method or form.payment_mode),
             vendor_name=form.vendor_name,
@@ -153,9 +167,9 @@ class ManualExpenseService:
         )
         apply_business_fields(
             expense,
-            main_category=form.main_category,
-            sub_category=form.sub_category or hints.get("sub_category"),
-            line_item=form.line_item or hints.get("line_item"),
+            main_category=resolved_main,
+            sub_category=resolved_sub or hints.get("sub_category"),
+            line_item=resolved_line_item or hints.get("line_item"),
             bill_date=parsed_date,
             amount_excl_gst=form.amount_excl_gst,
             gst_rate_pct=form.gst_rate_pct,
@@ -207,7 +221,7 @@ class ManualExpenseService:
                     label="Expense 1",
                     expense_id=existing.id,
                     is_duplicate=True,
-                    prefill=BillPrefillData(**prefill),
+                    prefill=BillPrefillData(**coerce_bill_prefill(prefill)),
                     files=resp.files,
                     preview_url=resp.preview_url,
                     thumbnail_url=resp.thumbnail_url,
@@ -245,7 +259,7 @@ class ManualExpenseService:
             label="Expense 1",
             expense_id=expense.id,
             is_duplicate=is_dup,
-            prefill=BillPrefillData(**prefill),
+            prefill=BillPrefillData(**coerce_bill_prefill(prefill)),
             files=resp.files,
             preview_url=resp.preview_url,
             thumbnail_url=resp.thumbnail_url,

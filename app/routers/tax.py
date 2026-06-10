@@ -1,5 +1,14 @@
 """Simplified tax configuration for expense entry (no country selection)."""
-from fastapi import APIRouter
+from typing import Optional
+
+from fastapi import APIRouter, HTTPException, Query
+
+from app.utils.tax_regimes import (
+    TAX_REGIMES,
+    get_regime,
+    get_tax_types_catalog,
+    list_countries,
+)
 
 router = APIRouter(prefix="/tax", tags=["tax"])
 
@@ -35,5 +44,26 @@ async def list_tax_types():
         "suggested_labels": [
             "GST", "CGST", "SGST", "IGST", "VAT", "Service Tax", "TCS", "Other",
         ],
-        "deprecated": "Country-based regimes removed. Use GET /tax/config instead.",
+        "tax_types": get_tax_types_catalog(),
+        "deprecated": "Use GET /tax/config for entry UI; GET /tax/regimes for country regimes.",
+    }
+
+
+@router.get("/regimes")
+async def list_tax_regimes(country: Optional[str] = Query(None, description="ISO country code, e.g. IN")):
+    """
+    Country tax regimes for manual expense entry and policy defaults.
+    Without `country`, returns all supported countries plus full regime catalog.
+    """
+    if country:
+        regime = get_regime(country)
+        if not regime:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Unknown country code: {country.upper()}",
+            )
+        return regime
+    return {
+        "countries": list_countries(),
+        "regimes": list(TAX_REGIMES.values()),
     }

@@ -19,6 +19,7 @@ from app.models import (
 from app.services.ocr_service import OCRProcessor
 from app.services.tax_service import TaxService
 from app.utils.dedup import find_expense_by_file_hash
+from app.utils.ocr_quality import OcrScanUnreadable
 from app.utils.expense_helpers import attach_files_to_expense, parse_payment_method
 from app.utils.category_hashtags import (
     normalize_hashtags_list,
@@ -31,6 +32,25 @@ from app.utils.ocr_categories import (
 )
 
 ocr_processor = OCRProcessor()
+
+
+def coerce_bill_prefill(prefill: dict) -> dict:
+    """Ensure prefill dict validates as BillPrefillData (avoid 500 on response build)."""
+    from app.schemas import BillPrefillData
+
+    data = dict(prefill)
+    data.setdefault("file_name", "upload")
+    data.setdefault("bill_name", "Bill upload")
+    data.setdefault("bill_amount", 1.0)
+    data.setdefault("bill_date", datetime.utcnow())
+    data.setdefault("main_category", "miscellaneous")
+    data.setdefault("transaction_type", "expense")
+    try:
+        return BillPrefillData.model_validate(data).model_dump()
+    except Exception:
+        data.pop("tax_summary", None)
+        data["tax_lines"] = []
+        return BillPrefillData.model_validate(data).model_dump()
 
 
 def expense_needs_ocr_refresh(expense: Expense) -> bool:
@@ -447,7 +467,7 @@ def create_ocr_draft(
             tmp_path = tmp.name
 
         extracted = ocr_processor.extract_bill_data_sync(tmp_path, ext)
-        from app.utils.ocr_quality import OcrScanUnreadable, ensure_ocr_readable
+        from app.utils.ocr_quality import ensure_ocr_readable
 
         ensure_ocr_readable(extracted)
     except OcrScanUnreadable:
@@ -458,6 +478,31 @@ def create_ocr_draft(
         if tmp_path and os.path.exists(tmp_path):
             os.remove(tmp_path)
 
+    try:
+        return _create_ocr_draft_from_extracted(
+            db,
+            user_id,
+            file_info,
+            extracted,
+            batch_id,
+            bill_index,
+            refresh_expense,
+        )
+    except OcrScanUnreadable:
+        raise
+    except Exception as e:
+        return None, {}, False, str(e)
+
+
+def _create_ocr_draft_from_extracted(
+    db: Session,
+    user_id: int,
+    file_info: dict,
+    extracted: dict,
+    batch_id: Optional[int],
+    bill_index: int,
+    refresh_expense: Optional[Expense],
+) -> Tuple[Optional[Expense], dict, bool, Optional[str]]:
     transaction_type, main_category, sub_category = resolve_classification(
         extracted, extracted.get("raw_text")
     )
@@ -701,7 +746,7 @@ def to_multi_bill_response(result: dict, db: Optional[Session] = None):
                 label=b["label"],
                 expense_id=b["expense_id"],
                 is_duplicate=b["is_duplicate"],
-                prefill=BillPrefillData(**b["prefill"]),
+                prefill=BillPrefillData(**coerce_bill_prefill(b["prefill"])),
                 files=files,
                 preview_url=preview_url,
                 thumbnail_url=thumbnail_url,

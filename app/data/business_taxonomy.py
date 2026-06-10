@@ -563,20 +563,83 @@ def resolve_approval_roles(
     return ["manager", "hod"]
 
 
+def find_line_item_in_taxonomy(line_item: str) -> Optional[Dict[str, str]]:
+    """Locate canonical main/sub for a line-item value anywhere in the hierarchy."""
+    li_key = (line_item or "").lower().strip()
+    if not li_key:
+        return None
+    for main_key, tree in BUSINESS_TAXONOMY.items():
+        for sub_key, sub_node in tree.get("subcategories", {}).items():
+            for item in sub_node.get("line_items", []):
+                if item["value"] == li_key:
+                    return {
+                        "main_category": main_key,
+                        "sub_category": sub_key,
+                        "line_item": li_key,
+                    }
+    return None
+
+
+def normalize_taxonomy_fields(
+    main_category: Optional[str],
+    sub_category: Optional[str] = None,
+    line_item: Optional[str] = None,
+) -> Dict[str, Optional[str]]:
+    """
+    Align main/sub/line_item when the UI sends legacy main_category with hierarchy line items.
+    Line item is authoritative when it exists in BUSINESS_TAXONOMY.
+    """
+    main = (main_category or "").lower().strip()
+    sub = (sub_category or "").lower().strip() or None
+    li = (line_item or "").lower().strip() or None
+
+    if li:
+        located = find_line_item_in_taxonomy(li)
+        if located:
+            return located
+
+    business_main = LEGACY_MAIN_TO_BUSINESS.get(main, main)
+    if li and sub and resolve_line_item_meta(business_main, sub, li):
+        return {"main_category": business_main, "sub_category": sub, "line_item": li}
+    if sub and business_main in BUSINESS_TAXONOMY:
+        subs = BUSINESS_TAXONOMY[business_main].get("subcategories", {})
+        if sub in subs:
+            return {"main_category": business_main, "sub_category": sub, "line_item": li}
+
+    stored_main = business_main if business_main in BUSINESS_TAXONOMY else main
+    return {"main_category": stored_main or None, "sub_category": sub, "line_item": li}
+
+
 def resolve_line_item_meta(
     main: str, sub: Optional[str], line_item: Optional[str]
 ) -> Optional[Dict[str, Any]]:
     main_key = (main or "").lower().strip()
-    tree = BUSINESS_TAXONOMY.get(main_key, {})
-    subs = tree.get("subcategories", {})
     sub_key = (sub or "").lower().strip()
-    sub_node = subs.get(sub_key)
-    if not sub_node:
-        return None
     li_key = (line_item or "").lower().strip()
-    for item in sub_node.get("line_items", []):
-        if item["value"] == li_key:
-            return item
+    if not li_key:
+        return None
+
+    def _lookup(mk: str, sk: str) -> Optional[Dict[str, Any]]:
+        tree = BUSINESS_TAXONOMY.get(mk, {})
+        sub_node = tree.get("subcategories", {}).get(sk)
+        if not sub_node:
+            return None
+        for item in sub_node.get("line_items", []):
+            if item["value"] == li_key:
+                return item
+        return None
+
+    hit = _lookup(main_key, sub_key)
+    if hit:
+        return hit
+    mapped = LEGACY_MAIN_TO_BUSINESS.get(main_key)
+    if mapped and mapped != main_key:
+        hit = _lookup(mapped, sub_key)
+        if hit:
+            return hit
+    located = find_line_item_in_taxonomy(li_key)
+    if located:
+        return _lookup(located["main_category"], located["sub_category"])
     return None
 
 

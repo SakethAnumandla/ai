@@ -31,6 +31,7 @@ from app.schemas import (
 )
 from app.services.ocr_batch_service import process_ocr_batch
 from app.services.ocr_draft_service import (
+    create_manual_upload_draft,
     create_ocr_draft,
     expense_needs_ocr_refresh,
     process_multi_file_drafts,
@@ -218,6 +219,8 @@ class OcrApiService:
                 return build_expense_response(existing, is_duplicate=True)
 
         if as_draft:
+            err: Optional[str] = None
+            expense = None
             try:
                 expense, _prefill, _dup, err = create_ocr_draft(
                     self.db, user.id, file_info, None, 1, force_rescan
@@ -234,11 +237,10 @@ class OcrApiService:
                             "message": exc.message,
                         },
                     ) from exc
-                raise
+                err = str(exc)
             if err or not expense:
-                raise HTTPException(
-                    status_code=400,
-                    detail=err or "Could not extract bill data from image",
+                expense, _prefill, _dup = create_manual_upload_draft(
+                    self.db, user.id, file_info, None, 1
                 )
             self.db.commit()
             expense = (
