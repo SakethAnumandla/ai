@@ -4,6 +4,11 @@ __pycache__
 .venv
 venv
 .git
-uploads
+.cursor
 *.md
+docs
 terminals
+*.dump
+.pytest_cache
+.DS_Store
+docker/pgadmin

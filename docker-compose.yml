@@ -1,6 +1,6 @@
-# Backend + Redis. Database: Aiven Postgres via .env DATABASE_URL
+# Production: backend + Redis. Set DATABASE_URL in .env (e.g. Aiven Postgres).
 # Optional local Postgres: docker compose --profile local up -d
-# pgAdmin UI:          python scripts/setup_pgadmin.py  → http://localhost:5050/
+# Celery workers:         docker compose --profile workers up -d
 
 services:
   redis:
@@ -16,8 +16,6 @@ services:
     env_file:
       - .env
     environment:
-      # DATABASE_URL comes from .env (Aiven). For local Postgres use profile `local` and
-      # set DATABASE_URL=postgresql://user:password@postgres:5432/expense_tracker in .env.
       REDIS_ENABLED: "true"
       REDIS_URL: redis://redis:6379
       DB_POOL_SIZE: "2"
@@ -27,16 +25,9 @@ services:
       PADDLE_OCR_FAST_MODE: "true"
       PADDLE_OCR_MAX_PASSES_CLEAR: "4"
       PADDLE_OCR_MAX_PASSES_BLURRY: "7"
-      OCR_TEST_BYPASS: "true"
     depends_on:
       redis:
         condition: service_started
-    volumes:
-      - ./uploads:/app/uploads
-      # Live code for AI/chat fixes without full image rebuild (rebuild still needed for deps)
-      - ./app:/app/app
-      - ./scripts:/app/scripts
-      - ./tests:/app/tests
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", "import json,urllib.request; r=urllib.request.urlopen('http://127.0.0.1:8000/health'); d=json.load(r); assert d.get('database',{}).get('ok')"]
@@ -65,7 +56,6 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
-  # Only when you want a local DB instead of Aiven:
   postgres:
     profiles: ["local"]
     image: postgres:15
@@ -83,25 +73,5 @@ services:
       timeout: 5s
       retries: 10
 
-  # Web DB browser — http://localhost:5050/ (run scripts/setup_pgadmin.py first)
-  pgadmin:
-    profiles: ["tools"]
-    image: dpage/pgadmin4:8.14
-    environment:
-      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_EMAIL:-admin@expense.com}
-      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD:-admin}
-      PGADMIN_CONFIG_SERVER_MODE: "False"
-      PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED: "False"
-    ports:
-      - "5050:80"
-    volumes:
-      - pgadmin_data:/var/lib/pgadmin
-      - ./docker/pgadmin/servers.json:/pgadmin4/servers.json:ro
-      - ./docker/pgadmin/pgpass:/pgpass:ro
-    restart: unless-stopped
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-
 volumes:
   postgres_data:
-  pgadmin_data:

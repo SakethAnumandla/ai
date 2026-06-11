@@ -28,16 +28,6 @@ SUB_CATEGORY_MAP = {
 
 
 def _extract_text_from_bytes(file_data: bytes, ext: str) -> str:
-    import os
-
-    if os.getenv("OCR_TEST_BYPASS", "").strip().lower() in ("1", "true", "yes"):
-        return (
-            "Policy Name: API Test Travel Policy\n"
-            "Maximum Limit: 50000\n"
-            "Policy Type: travel\n"
-            "Valid from 01/04/2025\n"
-        )
-
     from app.services.ocr_service import OCRProcessor
 
     processor = OCRProcessor()

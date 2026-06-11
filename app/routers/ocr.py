@@ -81,17 +81,6 @@ async def scan_multiple_bills(
     if as_draft:
         return result
     batch, file_payloads, response = result
-    import os
-
-    if os.getenv("TESTING"):
-        process_ocr_batch(
-            batch.id,
-            file_payloads,
-            current_user.id,
-            auto_approve,
-            force_rescan,
-        )
-        return response
     background_tasks.add_task(
         process_ocr_batch,
         batch.id,

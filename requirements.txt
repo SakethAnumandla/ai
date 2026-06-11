@@ -20,7 +20,6 @@ celery>=5.3.0
 
 # HTTP & utilities
 requests>=2.31.0
-httpx>=0.26.0
 phonenumbers>=8.13.0
 pypdf>=4.0.0
 fuzzywuzzy>=0.18.0
@@ -32,7 +31,3 @@ opencv-python-headless==4.8.1.78
 Pillow>=10.0.0
 pdf2image>=1.16.0
 pytesseract>=0.3.10
-
-# Testing
-pytest>=7.4.0
-pytest-asyncio>=0.23.0

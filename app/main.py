@@ -12,7 +12,7 @@ from app.config import settings
 from app.database import engine, Base, dispose_engine, check_database, get_db
 from app.dependencies import get_current_user
 from app.models import User
-from app.routers import expenses, ocr, wallet, dashboard, policies, claims, approvals, categories, tax, ai, ai_memory, intelligence, manager, finance, executive, filters, expense_workflow, api_bootstrap
+from app.routers import expenses, ocr, wallet, dashboard, policies, claims, approvals, categories, tax, ai, ai_memory, intelligence, manager, finance, executive, filters, expense_workflow
 from app.schemas import get_all_categories, get_category_hierarchy, get_policy_types
 from app.ai.dependencies import shutdown_ai_redis
 from app.ai import models as _ai_models  # noqa: F401 — register AI tables with Base
@@ -52,22 +52,17 @@ def _init_database_schema() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    import os
-
     _init_database_schema()
-    if not os.getenv("TESTING"):
-        loop = asyncio.get_running_loop()
-        try:
-            from app.migrations.add_expense_business_fields import run as _migrate_business
-            from app.migrations.add_expense_submitted_by import run as _migrate_submitted_by
+    loop = asyncio.get_running_loop()
+    try:
+        from app.migrations.add_expense_business_fields import run as _migrate_business
+        from app.migrations.add_expense_submitted_by import run as _migrate_submitted_by
 
-            await loop.run_in_executor(None, _migrate_business)
-            await loop.run_in_executor(None, _migrate_submitted_by)
-        except Exception as exc:
-            logger.warning("business_fields_migration: %s", exc)
-        await loop.run_in_executor(None, _warm_paddle_ocr)
-    else:
-        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, _migrate_business)
+        await loop.run_in_executor(None, _migrate_submitted_by)
+    except Exception as exc:
+        logger.warning("business_fields_migration: %s", exc)
+    await loop.run_in_executor(None, _warm_paddle_ocr)
     if (settings.openai_api_key or "").strip():
         logger.info(
             "openai.ready model=%s conversational=%s welcome=%s",
@@ -81,8 +76,7 @@ async def lifespan(app: FastAPI):
         )
     yield
     await shutdown_ai_redis()
-    if not os.getenv("TESTING"):
-        dispose_engine()
+    dispose_engine()
 
 
 app = FastAPI(
@@ -92,10 +86,12 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# CORS middleware
+_cors_raw = (settings.cors_origins or "*").strip()
+_cors_origins = ["*"] if _cors_raw == "*" else [o.strip() for o in _cors_raw.split(",") if o.strip()]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Configure for production
+    allow_origins=_cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -119,7 +115,6 @@ app.include_router(manager.router)
 app.include_router(finance.router)
 app.include_router(executive.router)
 app.include_router(expense_workflow.router)
-app.include_router(api_bootstrap.router)
 
 @app.get("/")
 async def root():

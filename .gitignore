@@ -5,7 +5,6 @@ __pycache__/
 *.pyc
 .pytest_cache/
 .DS_Store
-uploads/
 *.pem
 ca.pem
 docker/pgadmin/pgpass

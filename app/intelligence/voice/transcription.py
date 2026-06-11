@@ -38,19 +38,6 @@ class TranscriptionService:
         Transcribe audio bytes. Returns (result, latency_ms).
         language: ISO-639-1 hint (e.g. 'en', 'hi'); None = auto-detect.
         """
-        if os.getenv("TESTING", "").strip().lower() in ("1", "true", "yes") or os.getenv(
-            "OCR_TEST_BYPASS", ""
-        ).strip().lower() in ("1", "true", "yes"):
-            return (
-                VoiceTranscriptionResult(
-                    transcript="Add a lunch expense for fifty rupees",
-                    language=language or "en",
-                    model=self._model,
-                    duration_seconds=1.0,
-                ),
-                5,
-            )
-
         ext = file_name.rsplit(".", 1)[-1].lower() if "." in file_name else "webm"
         if ext not in settings.voice_allowed_extensions:
             ext = "webm"

@@ -31,7 +31,7 @@ class Settings(BaseSettings):
     db_pool_pre_ping: bool = True
     # Celery workers: one connection per task (set CELERY_WORKER=1 in worker container)
     db_use_null_pool: bool = False
-    upload_dir: str = "./uploads"
+    upload_dir: str = "/tmp/bizwy-uploads"
     max_upload_size: int = 10485760
     allowed_extensions: List[str] = ["jpg", "jpeg", "png", "pdf", "webp", "avi"]
     ocr_api_key: str = ""
@@ -169,8 +169,8 @@ class Settings(BaseSettings):
     celery_result_backend: str = ""
     celery_task_always_eager: bool = False
 
-    # Idempotent POST /api-test/bootstrap for Postman/Newman (dynamic fixture IDs)
-    enable_api_test_bootstrap: bool = True
+    # CORS — comma-separated origins, or "*" for all (default)
+    cors_origins: str = "*"
 
     model_config = SettingsConfigDict(
         env_file=_ENV_FILE,

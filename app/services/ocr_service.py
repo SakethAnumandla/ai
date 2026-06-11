@@ -1609,25 +1609,6 @@ class OCRProcessor:
         return self.extract_bill_data_sync(file_path, file_type)
 
     def extract_bill_data_sync(self, file_path: str, file_type: str) -> Dict[str, Any]:
-        import os
-
-        if os.getenv("OCR_TEST_BYPASS", "").strip().lower() in ("1", "true", "yes"):
-            sample = """
-Bhagini
-Sriganda Palace
-Sub-Total 3000
-CGST 2.5% 75
-SGST 2.5% 75
-Payment Mode: Cash
-Total
-3150
-"""
-            parsed = self._parse_bill_text(sample)
-            parsed["raw_text"] = sample.strip()
-            parsed["confidence_score"] = 88.0
-            parsed["ocr_engine_confidence"] = 0.88
-            return parsed
-
         if file_type.lower() == "pdf":
             return self.process_pdf_sync(file_path)
         if file_type.lower() in ["jpg", "jpeg", "png", "webp", "avi"]:
