@@ -59,6 +59,10 @@ def _resolve_path(path: str, method: str = "GET") -> str:
         expense_id = str(s.expense_rejected_id)
     elif path.endswith("/approve") or "approval-workflow" in path:
         expense_id = str(s.expense_submitted_id)
+    elif path.endswith("/taxes") and method == "PUT":
+        expense_id = str(s.expense_thumb_id)
+    elif method == "PATCH" and path == "/expenses/{expense_id}":
+        expense_id = str(s.expense_thumb_id)
     elif "/files" in path or "/thumbnail" in path:
         expense_id = str(s.expense_thumb_id)
 

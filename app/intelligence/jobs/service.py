@@ -1,7 +1,8 @@
 """Processing job lifecycle — create, poll, Celery dispatch with thread fallback."""
 import logging
+import threading
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 
 from sqlalchemy.orm import Session
 
@@ -9,6 +10,18 @@ from app.intelligence.schemas import JobStatus, JobType, ProcessingJobOut
 from app.models import ProcessingJob, ProcessingJobStatus
 
 logger = logging.getLogger(__name__)
+
+
+def _dispatch_in_background(label: str, fn: Callable[..., None], *args) -> None:
+    """Run long jobs off the HTTP thread so POST handlers return 202 quickly."""
+
+    def _runner() -> None:
+        try:
+            fn(*args)
+        except Exception:
+            logger.exception("%s background job failed", label)
+
+    threading.Thread(target=_runner, name=f"job-{label}", daemon=True).start()
 
 
 class JobService:
@@ -95,10 +108,10 @@ class JobService:
                 celery_task_id=async_result.id,
             )
         except Exception as exc:
-            logger.warning("Celery dispatch failed, running inline: %s", exc)
+            logger.warning("Celery dispatch failed, running in background: %s", exc)
             from app.intelligence.tasks.receipt_tasks import run_receipt_ocr_job
 
-            run_receipt_ocr_job(job_id, user_id)
+            _dispatch_in_background("receipt-ocr", run_receipt_ocr_job, job_id, user_id)
 
     def dispatch_voice_transcribe(self, job_id: int, user_id: int) -> None:
         try:
@@ -112,10 +125,10 @@ class JobService:
                 celery_task_id=async_result.id,
             )
         except Exception as exc:
-            logger.warning("Celery dispatch failed, running inline: %s", exc)
+            logger.warning("Celery dispatch failed, running in background: %s", exc)
             from app.intelligence.tasks.voice_tasks import run_voice_transcribe_job
 
-            run_voice_transcribe_job(job_id, user_id)
+            _dispatch_in_background("voice-transcribe", run_voice_transcribe_job, job_id, user_id)
 
     def dispatch_voice_chat(self, job_id: int, user_id: int) -> None:
         try:
@@ -129,10 +142,10 @@ class JobService:
                 celery_task_id=async_result.id,
             )
         except Exception as exc:
-            logger.warning("Celery dispatch failed, running inline: %s", exc)
+            logger.warning("Celery dispatch failed, running in background: %s", exc)
             from app.intelligence.tasks.voice_tasks import run_voice_chat_job
 
-            run_voice_chat_job(job_id, user_id)
+            _dispatch_in_background("voice-chat", run_voice_chat_job, job_id, user_id)
 
     def dispatch_finance_report(self, job_id: int, user_id: int) -> None:
         try:
@@ -146,7 +159,7 @@ class JobService:
                 celery_task_id=async_result.id,
             )
         except Exception as exc:
-            logger.warning("Celery dispatch failed, running inline: %s", exc)
+            logger.warning("Celery dispatch failed, running in background: %s", exc)
             from app.finance.tasks.report_tasks import run_finance_report_job
 
-            run_finance_report_job(job_id, user_id)
+            _dispatch_in_background("finance-report", run_finance_report_job, job_id, user_id)

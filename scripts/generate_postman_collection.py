@@ -17,38 +17,43 @@ COLLECTION_PATH = OUT_DIR / "Bizwy_Expense_API.postman_collection.json"
 ENV_PATH = OUT_DIR / "Bizwy_Expense_API.postman_environment.json"
 
 SKIP_PATHS = frozenset({"/docs", "/docs/oauth2-redirect", "/openapi.json", "/redoc"})
+SKIP_ROUTE_PREFIXES = ("/api-test/",)
 
 DEFAULT_BASE_URL = "http://localhost:8000"
 
-# Collection variables — run `python scripts/seed_api_data.py` and paste printed IDs here.
+# Collection variables — populated dynamically by Setup folder (POST /api-test/bootstrap).
 COLLECTION_VARS = [
     ("base_url", DEFAULT_BASE_URL),
     ("session_id", "api-test-session01"),
-    ("expense_draft_id", "1"),
-    ("expense_submitted_id", "2"),
-    ("expense_empty_draft_id", "3"),
-    ("expense_rejected_id", "4"),
-    ("expense_thumb_id", "5"),
-    ("expense_file_id", "1"),
-    ("expense_approval_id", "1"),
-    ("policy_id", "1"),
-    ("policy_deletable_id", "2"),
-    ("claim_id", "1"),
-    ("claim_approval_id", "1"),
-    ("ocr_bill_id", "1"),
-    ("ocr_batch_id", "1"),
-    ("job_id", "1"),
-    ("finance_report_job_id", "2"),
-    ("snapshot_a_id", "1"),
-    ("snapshot_b_id", "2"),
-    ("alert_id", "1"),
-    ("bulk_export_id", "00000000-0000-0000-0000-000000000001"),
+    ("expense_draft_id", ""),
+    ("expense_submitted_id", ""),
+    ("expense_empty_draft_id", ""),
+    ("expense_rejected_id", ""),
+    ("expense_thumb_id", ""),
+    ("expense_file_id", ""),
+    ("expense_approval_id", ""),
+    ("policy_id", ""),
+    ("policy_deletable_id", ""),
+    ("claim_id", ""),
+    ("claim_approval_id", ""),
+    ("ocr_bill_id", ""),
+    ("ocr_batch_id", ""),
+    ("job_id", ""),
+    ("finance_report_job_id", ""),
+    ("snapshot_a_id", ""),
+    ("snapshot_b_id", ""),
+    ("alert_id", ""),
+    ("bulk_export_id", ""),
     ("review_token", "api-test-review-token-0001"),
     ("category", "meals_entertainment"),
     ("financial_year", "FY2025-26"),
 ]
 
+RECEIPT_FIXTURE = "scripts/fixtures/receipt.png"
+VOICE_FIXTURE = "scripts/fixtures/sample.webm"
+
 FOLDER_ORDER = [
+    "Setup (run first)",
     "General",
     "Health",
     "Categories & Tax",
@@ -79,6 +84,8 @@ def _collect_routes() -> List[Tuple[str, str]]:
         if not hasattr(route, "methods") or not hasattr(route, "path"):
             continue
         if route.path in SKIP_PATHS:
+            continue
+        if any(route.path.startswith(p) for p in SKIP_ROUTE_PREFIXES):
             continue
         for method in sorted(route.methods - {"HEAD", "OPTIONS"}):
             key = (method, route.path)
@@ -125,6 +132,10 @@ def _path_to_postman(path: str, method: str) -> str:
         expense_id = "{{expense_rejected_id}}"
     elif path.endswith("/approve") or "approval-workflow" in path:
         expense_id = "{{expense_submitted_id}}"
+    elif path.endswith("/taxes") and method == "PUT":
+        expense_id = "{{expense_thumb_id}}"
+    elif method == "PATCH" and path == "/expenses/{expense_id}":
+        expense_id = "{{expense_thumb_id}}"
     elif "/files" in path or "/thumbnail" in path:
         expense_id = "{{expense_thumb_id}}"
 
@@ -265,7 +276,7 @@ def _json_body(method: str, path: str) -> Optional[str]:
             "comments": "Legacy approve OK",
         },
         "/policies": {
-            "policy_id": "POL-POSTMAN-001",
+            "policy_id": "POL-TEST-{{unique_suffix}}",
             "policy_name": "Postman Test Policy",
             "policy_type": "travel",
             "maximum_amount": 5000.0,
@@ -273,7 +284,7 @@ def _json_body(method: str, path: str) -> Optional[str]:
             "valid_from": now,
         },
         "/policies/create": {
-            "policy_id": "POL-POSTMAN-002",
+            "policy_id": "POL-CREATE-{{unique_suffix}}",
             "policy_name": "Postman Test Policy 2",
             "policy_type": "travel",
             "maximum_amount": 5000.0,
@@ -314,7 +325,7 @@ def _form_body(path: str) -> Optional[List[Dict[str, Any]]]:
             {
                 "key": "files",
                 "type": "file",
-                "src": "scripts/fixtures/bhagini_receipt.png",
+                "src": RECEIPT_FIXTURE,
                 "description": "Attach receipt image",
             },
         ]
@@ -331,7 +342,7 @@ def _form_body(path: str) -> Optional[List[Dict[str, Any]]]:
             {
                 "key": "file",
                 "type": "file",
-                "src": "scripts/fixtures/bhagini_receipt.png",
+                "src": RECEIPT_FIXTURE,
             },
         ]
     if path == "/ai/chat/upload":
@@ -341,7 +352,7 @@ def _form_body(path: str) -> Optional[List[Dict[str, Any]]]:
             {
                 "key": "files",
                 "type": "file",
-                "src": "scripts/fixtures/bhagini_receipt.png",
+                "src": RECEIPT_FIXTURE,
             },
         ]
     if path.startswith("/intelligence/voice"):
@@ -351,8 +362,8 @@ def _form_body(path: str) -> Optional[List[Dict[str, Any]]]:
             {
                 "key": "file",
                 "type": "file",
-                "src": [],
-                "description": "Upload audio/webm from mic",
+                "src": VOICE_FIXTURE,
+                "description": "Sample WebM audio clip",
             },
         ]
     if path == "/intelligence/receipt/scan-sync":
@@ -361,14 +372,14 @@ def _form_body(path: str) -> Optional[List[Dict[str, Any]]]:
             {
                 "key": "file",
                 "type": "file",
-                "src": "scripts/fixtures/bhagini_receipt.png",
+                "src": RECEIPT_FIXTURE,
             },
         ]
     return None
 
 
 def _file_upload_body(path: str) -> Optional[List[Dict[str, Any]]]:
-    receipt = "scripts/fixtures/bhagini_receipt.png"
+    receipt = RECEIPT_FIXTURE
     multi = {
         "/expenses/upload-drafts",
         "/ocr/scan-drafts",
@@ -451,13 +462,173 @@ def _build_request(method: str, path: str) -> Dict[str, Any]:
     return request
 
 
+def _test_script_save_bootstrap_ids() -> List[str]:
+    return [
+        "pm.test('Status code is 2xx success', function () {",
+        "    pm.expect(pm.response.code).to.be.oneOf([200, 201, 202, 204]);",
+        "});",
+        "const body = pm.response.json();",
+        "const ids = body.ids || body;",
+        "Object.entries(ids).forEach(function (entry) {",
+        "    const key = entry[0];",
+        "    const val = entry[1];",
+        "    if (val !== null && val !== undefined && val !== '') {",
+        "        pm.collectionVariables.set(key, String(val));",
+        "    }",
+        "});",
+    ]
+
+
+def _test_script_first_array_id(var_name: str, json_path: str) -> List[str]:
+    return [
+        "pm.test('Status code is 2xx success', function () {",
+        "    pm.expect(pm.response.code).to.be.oneOf([200, 201, 202, 204]);",
+        "});",
+        f"const rows = pm.response.json(){json_path};",
+        "if (Array.isArray(rows) && rows.length > 0) {",
+        "    const row = rows[0];",
+        f"    const id = row.id || row.approval_id || row.expense_id || row.bill_id;",
+        f"    if (id) pm.collectionVariables.set('{var_name}', String(id));",
+        "}",
+    ]
+
+
+def _setup_folder_items() -> List[Dict[str, Any]]:
+    return [
+        {
+            "name": "POST api-test / bootstrap",
+            "event": [
+                {
+                    "listen": "test",
+                    "script": {"type": "text/javascript", "exec": _test_script_save_bootstrap_ids()},
+                }
+            ],
+            "request": {
+                "method": "POST",
+                "header": [],
+                "url": {
+                    "raw": "{{base_url}}/api-test/bootstrap",
+                    "host": ["{{base_url}}"],
+                    "path": ["api-test", "bootstrap"],
+                },
+            },
+            "response": [],
+        },
+        {
+            "name": "GET ocr / bills (pick first bill id)",
+            "event": [
+                {
+                    "listen": "test",
+                    "script": {
+                        "type": "text/javascript",
+                        "exec": _test_script_first_array_id("ocr_bill_id", ""),
+                    },
+                }
+            ],
+            "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                    "raw": "{{base_url}}/ocr/bills",
+                    "host": ["{{base_url}}"],
+                    "path": ["ocr", "bills"],
+                },
+            },
+            "response": [],
+        },
+        {
+            "name": "GET expenses / approvals / pending (pick approval id)",
+            "event": [
+                {
+                    "listen": "test",
+                    "script": {
+                        "type": "text/javascript",
+                        "exec": _test_script_first_array_id("expense_approval_id", ""),
+                    },
+                }
+            ],
+            "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                    "raw": "{{base_url}}/expenses/approvals/pending",
+                    "host": ["{{base_url}}"],
+                    "path": ["expenses", "approvals", "pending"],
+                },
+            },
+            "response": [],
+        },
+        {
+            "name": "GET approvals / pending (pick claim approval id)",
+            "event": [
+                {
+                    "listen": "test",
+                    "script": {
+                        "type": "text/javascript",
+                        "exec": _test_script_first_array_id("claim_approval_id", ""),
+                    },
+                }
+            ],
+            "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                    "raw": "{{base_url}}/approvals/pending",
+                    "host": ["{{base_url}}"],
+                    "path": ["approvals", "pending"],
+                },
+            },
+            "response": [],
+        },
+        {
+            "name": "POST manager / bulk-preview / export (pick export id)",
+            "event": [
+                {
+                    "listen": "test",
+                    "script": {
+                        "type": "text/javascript",
+                        "exec": [
+                            "pm.test('Status code is 2xx success', function () {",
+                            "    pm.expect(pm.response.code).to.be.oneOf([200, 201, 202, 204]);",
+                            "});",
+                            "const body = pm.response.json();",
+                            "const exportId = body.export_id || body.id;",
+                            "if (exportId) pm.collectionVariables.set('bulk_export_id', String(exportId));",
+                        ],
+                    },
+                }
+            ],
+            "request": {
+                "method": "POST",
+                "header": [{"key": "Content-Type", "value": "application/json"}],
+                "body": {
+                    "mode": "raw",
+                    "raw": json.dumps(
+                        {"approval_ids": ["{{claim_approval_id}}"], "format": "csv"},
+                        indent=2,
+                    ),
+                    "options": {"raw": {"language": "json"}},
+                },
+                "url": {
+                    "raw": "{{base_url}}/manager/bulk-preview/export",
+                    "host": ["{{base_url}}"],
+                    "path": ["manager", "bulk-preview", "export"],
+                },
+            },
+            "response": [],
+        },
+    ]
+
+
 def _build_collection(
     routes: List[Tuple[str, str]],
     *,
     base_url: str,
     env_name: str,
 ) -> Dict[str, Any]:
-    folders: Dict[str, List[Dict[str, Any]]] = {}
+    folders: Dict[str, List[Dict[str, Any]]] = {
+        "Setup (run first)": _setup_folder_items(),
+    }
     for method, path in routes:
         folder = _folder_name(path)
         folders.setdefault(folder, []).append(
@@ -487,14 +658,27 @@ def _build_collection(
                 f"**Environment:** {env_name}\n\n"
                 "**Setup:**\n"
                 "1. Import this collection and the environment file into Postman.\n"
-                "2. Select the environment from the top-right dropdown.\n"
-                "3. Run **GET /health** to confirm the API is reachable.\n"
+                "2. Run the **Setup (run first)** folder — it calls `POST /api-test/bootstrap` "
+                "and discovers live IDs from the database (no hardcoded expense/bill IDs).\n"
+                "3. Run the rest of the collection or use Newman.\n"
                 "4. No auth required — dev user is auto-used on this backend.\n\n"
-                "**Note:** OCR/upload requests reference `scripts/fixtures/bhagini_receipt.png` "
-                "when testing file uploads locally."
+                f"**Fixtures:** `{RECEIPT_FIXTURE}`, `{VOICE_FIXTURE}` for uploads."
             ),
             "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
         },
+        "event": [
+            {
+                "listen": "test",
+                "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                        "pm.test('Status code is 2xx success', function () {",
+                        "    pm.expect(pm.response.code).to.be.oneOf([200, 201, 202, 204]);",
+                        "});",
+                    ],
+                },
+            }
+        ],
         "variable": [{"key": k, "value": v, "type": "string"} for k, v in collection_vars],
         "item": items,
     }

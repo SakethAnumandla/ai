@@ -667,18 +667,32 @@ def process_multi_file_drafts(
     for idx, file_info in enumerate(file_infos, start=1):
         try:
             if use_ocr:
-                expense, prefill, is_dup, err = create_ocr_draft(
-                    db, user_id, file_info, batch.id, idx, force_rescan
-                )
+                try:
+                    expense, prefill, is_dup, err = create_ocr_draft(
+                        db, user_id, file_info, batch.id, idx, force_rescan
+                    )
+                except OcrScanUnreadable:
+                    expense, prefill, is_dup = create_manual_upload_draft(
+                        db, user_id, file_info, batch.id, idx
+                    )
+                    err = None
             else:
                 expense, prefill, is_dup = create_manual_upload_draft(
                     db, user_id, file_info, batch.id, idx
                 )
                 err = None
 
-            if err:
-                failed.append({"bill_index": idx, "file_name": file_info["file_name"], "error": err})
-                continue
+            if err or not expense:
+                if not expense:
+                    expense, prefill, is_dup = create_manual_upload_draft(
+                        db, user_id, file_info, batch.id, idx
+                    )
+                    err = None
+                if err:
+                    failed.append(
+                        {"bill_index": idx, "file_name": file_info["file_name"], "error": err}
+                    )
+                    continue
 
             if is_dup:
                 skipped.append(
@@ -704,7 +718,7 @@ def process_multi_file_drafts(
                 {"bill_index": idx, "file_name": file_info["file_name"], "error": str(e)}
             )
 
-    batch.status = "completed" if bills else "failed"
+    batch.status = "completed" if bills else ("partial" if failed else "failed")
     batch.completed_at = datetime.utcnow()
     batch.result_summary = {"failed_files": failed, "skipped_duplicates": skipped}
     db.commit()

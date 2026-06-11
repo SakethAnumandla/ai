@@ -78,6 +78,16 @@ def test_ocr_scan_returns_draft_not_500(client: TestClient):
     files = {"file": ("receipt.png", io.BytesIO(MINIMAL_PNG), "image/png")}
     r = client.post("/ocr/scan", files=files)
     assert r.status_code in (200, 201), r.text
+    assert r.json().get("id")
+
+
+def test_api_bootstrap_returns_fixture_ids(client: TestClient):
+    r = client.post("/api-test/bootstrap")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["status"] == "ready"
+    assert body["ids"]["expense_draft_id"]
+    assert body["ids"]["ocr_bill_id"]
 
 
 def test_manual_scan_returns_draft_not_500(client: TestClient):

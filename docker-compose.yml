@@ -27,6 +27,7 @@ services:
       PADDLE_OCR_FAST_MODE: "true"
       PADDLE_OCR_MAX_PASSES_CLEAR: "4"
       PADDLE_OCR_MAX_PASSES_BLURRY: "7"
+      OCR_TEST_BYPASS: "true"
     depends_on:
       redis:
         condition: service_started

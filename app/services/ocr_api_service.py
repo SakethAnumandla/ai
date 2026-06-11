@@ -226,17 +226,6 @@ class OcrApiService:
                     self.db, user.id, file_info, None, 1, force_rescan
                 )
             except Exception as exc:
-                from app.utils.ocr_quality import OcrScanUnreadable
-
-                if isinstance(exc, OcrScanUnreadable):
-                    raise HTTPException(
-                        status_code=422,
-                        detail={
-                            "code": "ocr_unreadable",
-                            "reason": exc.reason,
-                            "message": exc.message,
-                        },
-                    ) from exc
                 err = str(exc)
             if err or not expense:
                 expense, _prefill, _dup = create_manual_upload_draft(

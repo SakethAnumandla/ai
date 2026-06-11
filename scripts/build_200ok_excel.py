@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Build API_200OK_LIST.xlsx from Newman log or route inventory."""
+"""Build API_200OK_LIST.xlsx from curl test report or route inventory."""
 from __future__ import annotations
 
+import os
 import re
 import sys
 from datetime import datetime, timezone
@@ -12,55 +13,39 @@ from openpyxl.styles import Alignment, Font, PatternFill
 
 ROOT = Path(__file__).resolve().parents[1]
 OUTPUT = ROOT / "docs" / "API_200OK_LIST.xlsx"
-LOG = Path(
-    "/Users/admin/.cursor/projects/Users-admin-Desktop-bizwy-expense-backend-New-main/terminals/895033.txt"
+REPORT = ROOT / "docs" / "API_CURL_TEST_REPORT.md"
+BASE = os.environ.get("EXPENSE_API_BASE", "http://127.0.0.1:8000").rstrip("/")
+
+ROW_RE = re.compile(
+    r"^\|\s*\d+\s*\|\s*(GET|POST|PUT|PATCH|DELETE)\s*\|\s*`([^`]+)`\s*\|\s*(\d+|SKIP)\s*\|"
 )
-BASE = "https://api.bizwy.in"
-
-SUCCESS = re.compile(
-    r"^\s*(GET|POST|PUT|PATCH|DELETE)\s+(https://\S+)\s+\[(\d+)\s+([^,\]]+)",
-    re.IGNORECASE,
-)
-NAME = re.compile(r"^↳\s+(.+)$")
 
 
-def parse_newman_log(path: Path) -> list[dict]:
+def parse_curl_report(path: Path) -> tuple[list[dict], list[dict]]:
+    """Return (ok_rows, failed_rows) from API_CURL_TEST_REPORT.md."""
     if not path.is_file():
-        return []
-    lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
-    rows: list[dict] = []
-    current_name = ""
-    for i, line in enumerate(lines):
-        m_name = NAME.match(line)
-        if m_name:
-            current_name = m_name.group(1).strip()
-            continue
-        m = SUCCESS.search(line)
-        if not m and line.strip().startswith("[") and i > 0:
-            # Newman sometimes splits: URL line then "[201 Created, ...]" on next line
-            combined = lines[i - 1] + " " + line
-            m = SUCCESS.search(combined)
-        if not m and i + 1 < len(lines) and "http" in line:
-            combined = line + " " + lines[i + 1]
-            m = SUCCESS.search(combined)
+        return [], []
+    ok_rows: list[dict] = []
+    failed_rows: list[dict] = []
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        m = ROW_RE.match(line)
         if not m:
             continue
-        method, url, code_s, status_text = m.groups()
-        code = int(code_s)
-        if not (200 <= code < 300):
-            continue
-        path_only = url.replace(BASE, "").split("?")[0] or "/"
-        rows.append(
-            {
-                "name": current_name or f"{method} {path_only}",
-                "method": method.upper(),
-                "path": path_only,
-                "full_url": url,
-                "status_code": code,
-                "status_text": status_text.strip(),
-            }
-        )
-    return rows
+        method, route_path, status = m.groups()
+        code = int(status) if status.isdigit() else 0
+        row = {
+            "name": f"{method} {route_path}",
+            "method": method,
+            "path": route_path,
+            "full_url": f"{BASE}{route_path}",
+            "status_code": status,
+            "status_text": "OK" if 200 <= code < 300 else status,
+        }
+        if 200 <= code < 300:
+            ok_rows.append(row)
+        else:
+            failed_rows.append(row)
+    return ok_rows, failed_rows
 
 
 def all_routes() -> list[dict]:
@@ -89,7 +74,7 @@ def all_routes() -> list[dict]:
     return rows
 
 
-def write_excel(ok_rows: list[dict], all_rows: list[dict]) -> None:
+def write_excel(ok_rows: list[dict], all_rows: list[dict], failed_rows: list[dict] | None = None) -> None:
     wb = Workbook()
     headers = ["S.No", "API Name", "Method", "Path", "Full URL", "Status Code", "Status Text"]
     hfill = PatternFill("solid", fgColor="1F4E79")
@@ -117,15 +102,25 @@ def write_excel(ok_rows: list[dict], all_rows: list[dict]) -> None:
 
     meta = wb.create_sheet("Summary")
     meta.append(["Field", "Value"])
-    meta.append(["Production Base URL", BASE])
-    meta.append(["Test Date", "2026-06-10"])
-    meta.append(["Source", "Postman/Newman production run"])
+    meta.append(["Base URL", BASE])
+    meta.append(["Test Date", datetime.now(timezone.utc).strftime("%Y-%m-%d")])
+    meta.append(["Source", str(REPORT.name)])
     meta.append(["200 OK (2xx) APIs", len(ok_rows)])
+    meta.append(["Failed / Skipped", len(failed_rows or [])])
     meta.append(["Total Registered APIs", len(all_rows)])
     meta.append(["Generated At (UTC)", datetime.now(timezone.utc).isoformat()])
-    meta.append(["Note", "Production was 502 at re-export time; list from last successful Newman run"])
 
-    for sheet in (ws, ws2):
+    if failed_rows:
+        ws3 = wb.create_sheet("Failures")
+        ws3.append(headers)
+        for c in range(1, len(headers) + 1):
+            cell = ws3.cell(1, c)
+            cell.fill = hfill
+            cell.font = hfont
+        for i, r in enumerate(failed_rows, 1):
+            ws3.append([i, r["name"], r["method"], r["path"], r["full_url"], r["status_code"], r["status_text"]])
+
+    for sheet in wb.worksheets:
         for col in sheet.columns:
             w = min(max(len(str(c.value or "")) for c in col) + 2, 70)
             sheet.column_dimensions[col[0].column_letter].width = w
@@ -136,13 +131,14 @@ def write_excel(ok_rows: list[dict], all_rows: list[dict]) -> None:
 
 
 def main() -> int:
-    ok = parse_newman_log(LOG)
+    ok, failed = parse_curl_report(REPORT)
     if not ok:
-        print("No 2xx rows parsed from log", file=sys.stderr)
+        print(f"No 2xx rows in {REPORT} — run scripts/run_every_api_curl.py first", file=sys.stderr)
         return 1
     all_rows = all_routes()
-    write_excel(ok, all_rows)
-    return 0
+    write_excel(ok, all_rows, failed)
+    print(f"2xx: {len(ok)} | non-2xx: {len(failed)} | registered: {len(all_rows)}")
+    return 0 if ok else 1
 
 
 if __name__ == "__main__":

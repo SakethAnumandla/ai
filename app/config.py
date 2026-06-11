@@ -169,6 +169,9 @@ class Settings(BaseSettings):
     celery_result_backend: str = ""
     celery_task_always_eager: bool = False
 
+    # Idempotent POST /api-test/bootstrap for Postman/Newman (dynamic fixture IDs)
+    enable_api_test_bootstrap: bool = True
+
     model_config = SettingsConfigDict(
         env_file=_ENV_FILE,
         env_file_encoding="utf-8",

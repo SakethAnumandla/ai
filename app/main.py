@@ -12,7 +12,7 @@ from app.config import settings
 from app.database import engine, Base, dispose_engine, check_database, get_db
 from app.dependencies import get_current_user
 from app.models import User
-from app.routers import expenses, ocr, wallet, dashboard, policies, claims, approvals, categories, tax, ai, ai_memory, intelligence, manager, finance, executive, filters, expense_workflow
+from app.routers import expenses, ocr, wallet, dashboard, policies, claims, approvals, categories, tax, ai, ai_memory, intelligence, manager, finance, executive, filters, expense_workflow, api_bootstrap
 from app.schemas import get_all_categories, get_category_hierarchy, get_policy_types
 from app.ai.dependencies import shutdown_ai_redis
 from app.ai import models as _ai_models  # noqa: F401 — register AI tables with Base
@@ -119,6 +119,7 @@ app.include_router(manager.router)
 app.include_router(finance.router)
 app.include_router(executive.router)
 app.include_router(expense_workflow.router)
+app.include_router(api_bootstrap.router)
 
 @app.get("/")
 async def root():

@@ -75,16 +75,27 @@ class ReceiptIntelligencePipeline:
                 stitched = PdfReceiptAggregator.stitch(legacy_pages)
                 ocr_meta = BaseOCRProvider.normalize(stitched)
 
-        expense, prefill, is_dup, err = create_ocr_draft(
-            self._db,
-            user.id,
-            file_info,
-            batch_id=None,
-            bill_index=bill_index,
-            force_rescan=force_rescan,
-        )
-        if err:
-            raise RuntimeError(err)
+        from app.services.ocr_draft_service import create_manual_upload_draft
+        from app.utils.ocr_quality import OcrScanUnreadable
+
+        try:
+            expense, prefill, is_dup, err = create_ocr_draft(
+                self._db,
+                user.id,
+                file_info,
+                batch_id=None,
+                bill_index=bill_index,
+                force_rescan=force_rescan,
+            )
+        except OcrScanUnreadable:
+            expense, prefill, is_dup = create_manual_upload_draft(
+                self._db, user.id, file_info, None, bill_index or 1
+            )
+            err = None
+        if err or not expense:
+            expense, prefill, is_dup = create_manual_upload_draft(
+                self._db, user.id, file_info, None, bill_index or 1
+            )
         if not expense:
             raise RuntimeError("Failed to create expense draft")
 
