@@ -70,6 +70,8 @@ def get_session_lock_manager(
     client = redis_store._client if redis_store.is_connected else None
     if _session_lock_manager is None:
         _session_lock_manager = SessionLockManager(redis_client=client)
+    elif client is not None and _session_lock_manager._redis is None:
+        _session_lock_manager._redis = client
     return _session_lock_manager
 
 

@@ -160,7 +160,8 @@ _CREATION_MODE_QUESTION = (
 
 _OCR_WAIT_MESSAGE = (
     "Please attach your receipt (image or PDF) using the 📎 button. "
-    "I'll extract all the details automatically."
+    "I'll extract all the details automatically.\n\n"
+    "You can also say **manual** to enter details yourself, or **cancel** to stop."
 )
 
 _MANUAL_ATTACHMENT_QUESTION = (
@@ -175,6 +176,10 @@ _MANUAL_CHOICE_RE = re.compile(
 )
 _MULTI_BILL_RE = re.compile(
     r"\b(\w+)\s+expense\s+and\s+(\w+)\s+expense\b|\b(travel|meal|meals|food|lunch|dinner|hotel|cab|fuel)\b\s+and\s+\b(travel|meal|meals|food|lunch|dinner|hotel|cab|fuel)\b",
+    re.I,
+)
+_OCR_CANCEL_RE = re.compile(
+    r"\b(cancel|never\s*mind|start\s*over|forget\s+it|stop)\b",
     re.I,
 )
 
@@ -491,6 +496,42 @@ class ConversationStateMachine:
             updated_state=state,
         )
 
+    def _handle_ocr_wait_reply(
+        self, state: ConversationWorkflowState, text: str
+    ) -> Optional[StateMachineResult]:
+        """Let users switch to manual entry or cancel instead of looping on attach prompt."""
+        if state.slots.get("creation_mode") != "ocr" or state.slots.get("expense_id"):
+            return None
+
+        if _OCR_CANCEL_RE.search(text or ""):
+            return StateMachineResult(
+                handled=True,
+                assistant_message="Okay — cancelled that expense. What would you like to do next?",
+                updated_state=None,
+                clear_state=True,
+            )
+
+        mode = _detect_creation_mode(text)
+        if mode == "manual":
+            state.slots["creation_mode"] = "manual"
+            state.slots.pop(_CREATION_MODE_SLOT, None)
+            state.pending_slots = self._recompute_pending_slots(state.slots)
+            next_slot = state.pending_slots[0] if state.pending_slots else None
+            intro = "Sure — let's enter the details manually."
+            return StateMachineResult(
+                handled=True,
+                assistant_message=(
+                    f"{intro} {slot_question(next_slot)}" if next_slot else intro
+                ),
+                updated_state=state,
+            )
+
+        return StateMachineResult(
+            handled=True,
+            assistant_message=_OCR_WAIT_MESSAGE,
+            updated_state=state,
+        )
+
     def _handle_pending_submit_reply(
         self, state: ConversationWorkflowState, text: str
     ) -> Optional[StateMachineResult]:
@@ -528,11 +569,9 @@ class ConversationStateMachine:
                     updated_state=state,
                 )
             if state.slots.get("creation_mode") == "ocr" and not state.slots.get("expense_id"):
-                return StateMachineResult(
-                    handled=True,
-                    assistant_message=_OCR_WAIT_MESSAGE,
-                    updated_state=state,
-                )
+                ocr_reply = self._handle_ocr_wait_reply(state, text)
+                if ocr_reply is not None:
+                    return ocr_reply
             if not state.pending_slots:
                 return self._offer_submit_confirmation(state, text)
             next_slot = state.pending_slots[0] if state.pending_slots else None
@@ -551,12 +590,9 @@ class ConversationStateMachine:
         if state is None:
             return StateMachineResult(handled=False)
 
-        if state.slots.get("creation_mode") == "ocr" and not state.slots.get("expense_id"):
-            return StateMachineResult(
-                handled=True,
-                assistant_message=_OCR_WAIT_MESSAGE,
-                updated_state=state,
-            )
+        ocr_reply = self._handle_ocr_wait_reply(state, text)
+        if ocr_reply is not None:
+            return ocr_reply
 
         mode_reply = self._handle_creation_mode_reply(state, text)
         if mode_reply is not None:

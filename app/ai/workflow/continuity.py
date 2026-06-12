@@ -98,13 +98,14 @@ class WorkflowContinuityService:
 
         pending = state.pending_slots
         if pending:
-            from app.ai.conversation.state_machine import _SLOT_QUESTIONS
+            from app.ai.conversation.state_machine import slot_question
+
             first = pending[0]
             label = draft_ctx.bill_name or "your expense"
             msg = (
                 f"Continuing {label}"
                 + (f" (₹{draft_ctx.bill_amount:,.0f})" if draft_ctx.bill_amount else "")
-                + f". {_SLOT_QUESTIONS.get(first, 'What detail should we add next?')}"
+                + f". {slot_question(first)}"
             )
         else:
             msg = (

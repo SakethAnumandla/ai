@@ -223,6 +223,38 @@ class AIRepository:
         self.db.refresh(row)
         return row
 
+    def fetch_memory_by_key(
+        self,
+        ctx: TenantUserContext,
+        memory_key: str,
+    ) -> Optional[AIMemory]:
+        now = datetime.now(timezone.utc)
+        return (
+            self.db.query(AIMemory)
+            .filter(
+                AIMemory.tenant_id == ctx.tenant_id,
+                AIMemory.user_id == ctx.user_id,
+                AIMemory.memory_key == memory_key,
+            )
+            .filter((AIMemory.expires_at.is_(None)) | (AIMemory.expires_at > now))
+            .first()
+        )
+
+    def delete_memory_by_key(
+        self,
+        ctx: TenantUserContext,
+        memory_key: str,
+    ) -> int:
+        q = self.db.query(AIMemory).filter(
+            AIMemory.tenant_id == ctx.tenant_id,
+            AIMemory.user_id == ctx.user_id,
+            AIMemory.memory_key == memory_key,
+        )
+        count = q.count()
+        q.delete(synchronize_session=False)
+        self.db.commit()
+        return count
+
     def delete_session_scoped_memories(self, ctx: SessionContext) -> int:
         """Delete draft/intent/workflow rows stored under this session_id."""
         suffix = f":{ctx.session_id}"

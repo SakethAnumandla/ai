@@ -1,4 +1,5 @@
 """AI copilot API."""
+import asyncio
 import logging
 from typing import List, Optional
 
@@ -149,7 +150,13 @@ async def ai_chat_with_attachments(
     )
 
     if receipt_infos:
-        scan = run_chat_receipt_scans(db, user, receipt_infos, user_message=message)
+        scan = await asyncio.to_thread(
+            run_chat_receipt_scans,
+            db,
+            user,
+            receipt_infos,
+            user_message=message,
+        )
         for draft in scan.draft_contexts:
             await memory.set_draft_expense(ctx, draft)
         expense_previews = scan.expense_previews or None
@@ -186,6 +193,10 @@ async def ai_chat_with_attachments(
                 "I've scanned your receipt and updated the expense details. "
                 "Review the preview below, then **Edit** any field or **Submit**."
             )
+        elif scan.results:
+            # Exit OCR "attach a receipt" wait — draft + preview cards carry state forward.
+            await memory.clear_workflow_state(ctx)
+            await memory.clear_pending_intent(ctx)
 
     if non_receipt_infos:
         bundle = build_chat_attachment_bundle_from_file_infos(

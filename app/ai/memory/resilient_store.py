@@ -49,6 +49,22 @@ class ResilientMemoryStore:
     async def disconnect(self) -> None:
         await self._redis.disconnect()
 
+    def _tenant_user(self, ctx: SessionContext) -> TenantUserContext:
+        return TenantUserContext(tenant_id=ctx.tenant_id, user_id=ctx.user_id)
+
+    async def _delete_pg_key(self, ctx: SessionContext, base_key: str) -> None:
+        tu = self._tenant_user(ctx)
+        key = _scoped_key(base_key, ctx)
+        await asyncio.to_thread(self._repo.delete_memory_by_key, tu, key)
+
+    async def _fetch_pg_value(self, ctx: SessionContext, base_key: str) -> Optional[dict]:
+        tu = self._tenant_user(ctx)
+        key = _scoped_key(base_key, ctx)
+        row = await asyncio.to_thread(self._repo.fetch_memory_by_key, tu, key)
+        if row and row.value is not None:
+            return row.value
+        return None
+
     async def append_session_message(
         self,
         ctx: SessionContext,
@@ -98,7 +114,7 @@ class ResilientMemoryStore:
             except Exception as exc:
                 logger.warning("Redis draft cache failed: %s", exc)
 
-        tu = TenantUserContext(tenant_id=ctx.tenant_id, user_id=ctx.user_id)
+        tu = self._tenant_user(ctx)
         await asyncio.to_thread(
             self._repo.save_memory,
             tu,
@@ -132,7 +148,7 @@ class ResilientMemoryStore:
         else:
             merged = [*existing, draft]
         payload = [draft_context_to_storage(d) for d in merged]
-        tu = TenantUserContext(tenant_id=ctx.tenant_id, user_id=ctx.user_id)
+        tu = self._tenant_user(ctx)
         await asyncio.to_thread(
             self._repo.save_memory,
             tu,
@@ -145,13 +161,10 @@ class ResilientMemoryStore:
         )
 
     async def get_draft_expenses(self, ctx: SessionContext) -> List[DraftExpenseContext]:
-        tu = TenantUserContext(tenant_id=ctx.tenant_id, user_id=ctx.user_id)
-        key = _scoped_key(_DRAFTS_LIST_KEY, ctx)
-        rows = await asyncio.to_thread(self._repo.fetch_memories, tu, limit=20)
-        for row in rows:
-            if row.memory_key == key:
-                raw = (row.value or {}).get("drafts") or []
-                return [DraftExpenseContext.model_validate(item) for item in raw]
+        raw = await self._fetch_pg_value(ctx, _DRAFTS_LIST_KEY)
+        if raw:
+            drafts = raw.get("drafts") or []
+            return [DraftExpenseContext.model_validate(item) for item in drafts]
         active = await self.get_draft_expense(ctx)
         return [active] if active else []
 
@@ -161,6 +174,8 @@ class ResilientMemoryStore:
                 await self._redis.clear_draft_expense(ctx)
             except Exception as exc:
                 logger.warning("Redis draft clear failed: %s", exc)
+        await self._delete_pg_key(ctx, _DRAFT_KEY)
+        await self._delete_pg_key(ctx, _DRAFTS_LIST_KEY)
 
     async def get_draft_expense(self, ctx: SessionContext) -> Optional[DraftExpenseContext]:
         if self.redis_available:
@@ -171,12 +186,9 @@ class ResilientMemoryStore:
             except Exception as exc:
                 logger.warning("Redis draft read failed: %s", exc)
 
-        tu = TenantUserContext(tenant_id=ctx.tenant_id, user_id=ctx.user_id)
-        key = _scoped_key(_DRAFT_KEY, ctx)
-        rows = await asyncio.to_thread(self._repo.fetch_memories, tu, limit=20)
-        for row in rows:
-            if row.memory_key == key:
-                return DraftExpenseContext.model_validate(row.value or {})
+        raw = await self._fetch_pg_value(ctx, _DRAFT_KEY)
+        if raw:
+            return DraftExpenseContext.model_validate(raw)
         return None
 
     async def set_pending_intent(
@@ -189,11 +201,10 @@ class ResilientMemoryStore:
         if self.redis_available:
             try:
                 await self._redis.set_pending_intent(ctx, intent, ttl=ttl)
-                return
             except Exception as exc:
                 logger.warning("Redis intent cache failed: %s", exc)
 
-        tu = TenantUserContext(tenant_id=ctx.tenant_id, user_id=ctx.user_id)
+        tu = self._tenant_user(ctx)
         await asyncio.to_thread(
             self._repo.save_memory,
             tu,
@@ -214,12 +225,9 @@ class ResilientMemoryStore:
             except Exception as exc:
                 logger.warning("Redis intent read failed: %s", exc)
 
-        tu = TenantUserContext(tenant_id=ctx.tenant_id, user_id=ctx.user_id)
-        key = _scoped_key(_INTENT_KEY, ctx)
-        rows = await asyncio.to_thread(self._repo.fetch_memories, tu, limit=20)
-        for row in rows:
-            if row.memory_key == key:
-                return PendingIntent.model_validate(row.value or {})
+        raw = await self._fetch_pg_value(ctx, _INTENT_KEY)
+        if raw:
+            return PendingIntent.model_validate(raw)
         return None
 
     async def set_workflow_state(
@@ -232,11 +240,10 @@ class ResilientMemoryStore:
         if self.redis_available:
             try:
                 await self._redis.set_workflow_state(ctx, state, ttl=ttl)
-                return
             except Exception as exc:
                 logger.warning("Redis workflow cache failed: %s", exc)
 
-        tu = TenantUserContext(tenant_id=ctx.tenant_id, user_id=ctx.user_id)
+        tu = self._tenant_user(ctx)
         await asyncio.to_thread(
             self._repo.save_memory,
             tu,
@@ -257,12 +264,9 @@ class ResilientMemoryStore:
             except Exception as exc:
                 logger.warning("Redis workflow read failed: %s", exc)
 
-        tu = TenantUserContext(tenant_id=ctx.tenant_id, user_id=ctx.user_id)
-        key = _scoped_key(_WORKFLOW_KEY, ctx)
-        rows = await asyncio.to_thread(self._repo.fetch_memories, tu, limit=20)
-        for row in rows:
-            if row.memory_key == key:
-                return ConversationWorkflowState.model_validate(row.value or {})
+        raw = await self._fetch_pg_value(ctx, _WORKFLOW_KEY)
+        if raw:
+            return ConversationWorkflowState.model_validate(raw)
         return None
 
     async def clear_workflow_state(self, ctx: SessionContext) -> None:
@@ -271,6 +275,7 @@ class ResilientMemoryStore:
                 await self._redis.clear_workflow_state(ctx)
             except Exception as exc:
                 logger.warning("Redis workflow clear failed: %s", exc)
+        await self._delete_pg_key(ctx, _WORKFLOW_KEY)
 
     async def clear_pending_intent(self, ctx: SessionContext) -> None:
         if self.redis_available:
@@ -278,6 +283,7 @@ class ResilientMemoryStore:
                 await self._redis.clear_pending_intent(ctx)
             except Exception as exc:
                 logger.warning("Redis intent clear failed: %s", exc)
+        await self._delete_pg_key(ctx, _INTENT_KEY)
 
     async def clear_session_state(self, ctx: SessionContext) -> None:
         """Clear Redis cache and Postgres-scoped session memory for this session."""
