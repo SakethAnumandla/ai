@@ -217,9 +217,11 @@ class ExpenseService:
             elif field == "hashtags" and value is not None:
                 expense.hashtags = normalize_hashtags_list(value)
             elif field == "tax_lines" and value is not None:
+                from app.services.tax_service import coerce_tax_line_dicts
+
                 TaxService(self.db).replace_expense_taxes(
                     expense,
-                    [line.model_dump() for line in value],
+                    coerce_tax_line_dicts(value),
                 )
             elif field == "country_code":
                 continue  # country selection removed from UI
@@ -480,9 +482,11 @@ class ExpenseService:
         if data.subtotal is not None:
             expense.subtotal = data.subtotal
         if data.tax_lines is not None:
+            from app.services.tax_service import coerce_tax_line_dicts
+
             TaxService(self.db).replace_expense_taxes(
                 expense,
-                [line.model_dump() for line in data.tax_lines],
+                coerce_tax_line_dicts(data.tax_lines),
             )
         pm = data.payment_method or data.payment_mode
         if pm is not None:

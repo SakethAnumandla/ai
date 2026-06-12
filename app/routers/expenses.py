@@ -213,7 +213,9 @@ async def replace_expense_taxes(
         raise HTTPException(status_code=400, detail="Cannot edit taxes on approved expense")
     if expense.status in (ExpenseStatus.SUBMITTED, ExpenseStatus.PENDING):
         raise HTTPException(status_code=400, detail="Cannot edit taxes on submitted expense")
-    TaxService(db).replace_expense_taxes(expense, [line.model_dump() for line in body.tax_lines])
+    from app.services.tax_service import coerce_tax_line_dicts
+
+    TaxService(db).replace_expense_taxes(expense, coerce_tax_line_dicts(body.tax_lines))
     db.commit()
     db.refresh(expense)
     expense = ExpenseAccessService(db).get_for_viewer(expense_id, current_user.id)

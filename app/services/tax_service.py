@@ -1,6 +1,6 @@
 """Expense tax lines: CRUD, summaries, OCR import."""
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence
 
 from sqlalchemy.orm import Session
 
@@ -15,6 +15,19 @@ from app.utils.tax_regimes import (
 
 def _amount_or_zero(v: Optional[float]) -> float:
     return round(float(v or 0), 2)
+
+
+def coerce_tax_line_dicts(lines: Sequence[Any]) -> List[Dict[str, Any]]:
+    """Accept Pydantic models or plain dicts (e.g. from ExpenseUpdate.dict())."""
+    out: List[Dict[str, Any]] = []
+    for line in lines:
+        if hasattr(line, "model_dump"):
+            out.append(line.model_dump())
+        elif isinstance(line, dict):
+            out.append(line)
+        else:
+            out.append(dict(line))
+    return out
 
 
 def _label_from_line(raw: Dict[str, Any], tax_type: str) -> str:
