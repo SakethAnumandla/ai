@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.data.business_taxonomy import (
     APPROVER_DIRECTORY,
-    CEO_ONLY_APPROVAL_THRESHOLD_EUR,
+    approval_roles_for_amount,
     resolve_approval_roles,
 )
 from app.dependencies import DEV_USER_USERNAME
@@ -19,24 +19,23 @@ from app.schemas import ExpenseApprovalRemark, ExpenseApprovalRemarksResponse
 
 def _roles_for_expense(expense: Expense) -> List[str]:
     """
-    Approval chain by amount and taxonomy:
-    - Large expenses → CEO only (L3)
-    - Taxonomy may specify Manager only (L1), Manager+HOD (L1+L2), etc.
+    Approval chain by amount tier and taxonomy:
+    - Below €10K → L1 only
+    - €10K–€100K → 2 levels
+    - Above €100K → 3 levels
+    Taxonomy roles are capped/extended to match the tier.
     """
     amount = float(expense.bill_amount or 0)
-    if amount >= CEO_ONLY_APPROVAL_THRESHOLD_EUR:
-        return ["ceo"]
-    return resolve_approval_roles(
+    taxonomy_roles = resolve_approval_roles(
         expense.main_category.value if expense.main_category else None,
         expense.sub_category,
         expense.line_item,
     )
+    return approval_roles_for_amount(taxonomy_roles, amount)
 
 
 def _approval_sequence(roles: List[str]) -> List[Tuple[int, str]]:
     """Map roles to L1/L2/L3 sequence numbers for UI and export."""
-    if roles == ["ceo"]:
-        return [(3, "ceo")]
     return [(idx, role) for idx, role in enumerate(roles, start=1)]
 
 

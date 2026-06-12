@@ -27,25 +27,28 @@ def validate_expense_date_not_future(bill_date: datetime) -> datetime:
 
 
 def expense_is_editable(expense: Expense) -> bool:
-    """Only drafts and rejected expenses can be edited."""
-    return expense.status in (ExpenseStatus.DRAFT, ExpenseStatus.REJECTED)
+    """All expenses except approved can be edited."""
+    return expense.status != ExpenseStatus.APPROVED
+
+
+def expense_is_deletable(expense: Expense) -> bool:
+    """All expenses except approved can be deleted."""
+    return expense.status != ExpenseStatus.APPROVED
 
 
 def assert_expense_editable(expense: Expense) -> None:
     if not expense_is_editable(expense):
-        if expense.status in (ExpenseStatus.SUBMITTED, ExpenseStatus.PENDING):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Submitted expenses cannot be edited. Wait for approval or rejection.",
-            )
-        if expense.status == ExpenseStatus.APPROVED:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Approved expenses cannot be edited.",
-            )
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Expense with status '{expense.status.value}' cannot be edited.",
+            detail="Approved expenses cannot be edited.",
+        )
+
+
+def assert_expense_deletable(expense: Expense) -> None:
+    if not expense_is_deletable(expense):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Approved expenses cannot be deleted.",
         )
 
 

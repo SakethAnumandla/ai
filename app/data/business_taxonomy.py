@@ -8,8 +8,11 @@ from typing import Any, Dict, List, Optional
 
 # EUR monthly budget target (wallet utilisation)
 DEFAULT_MONTHLY_BUDGET_EUR = 1_000_000.0
-# Expenses at or above this amount require CEO-only (L3) approval
-CEO_ONLY_APPROVAL_THRESHOLD_EUR = 100_000.0
+# Amount-based approval tiers (EUR): L1 only below 10K, 2 levels 10K–100K, 3 levels above 100K
+L1_ONLY_APPROVAL_THRESHOLD_EUR = 10_000.0
+THREE_LEVEL_APPROVAL_THRESHOLD_EUR = 100_000.0
+# Back-compat alias
+CEO_ONLY_APPROVAL_THRESHOLD_EUR = THREE_LEVEL_APPROVAL_THRESHOLD_EUR
 DEFAULT_CURRENCY = "EUR"
 
 # Allowed financial years for bill dates (Apr–Mar)
@@ -561,6 +564,41 @@ def resolve_approval_roles(
             return best
 
     return ["manager", "hod"]
+
+
+def approval_roles_for_amount(
+    taxonomy_roles: List[str],
+    amount: float,
+) -> List[str]:
+    """
+    Cap approval chain by bill amount:
+    - Below €10,000 → L1 only (1 level)
+    - €10,000 to €99,999.99 → 2 levels (L1 + L2)
+    - €100,000 and above → 3 levels (L1 + L2 + L3)
+    """
+    roles = [r.lower() for r in (taxonomy_roles or []) if r]
+    if not roles:
+        roles = ["manager", "hod"]
+
+    if amount < L1_ONLY_APPROVAL_THRESHOLD_EUR:
+        return roles[:1] if roles else ["manager"]
+
+    if amount < THREE_LEVEL_APPROVAL_THRESHOLD_EUR:
+        two: List[str] = []
+        for candidate in roles + ["manager", "hod"]:
+            if candidate not in two:
+                two.append(candidate)
+            if len(two) >= 2:
+                break
+        return two[:2]
+
+    three: List[str] = []
+    for candidate in roles + ["manager", "hod", "ceo"]:
+        if candidate not in three:
+            three.append(candidate)
+        if len(three) >= 3:
+            break
+    return three[:3]
 
 
 def find_line_item_in_taxonomy(line_item: str) -> Optional[Dict[str, str]]:

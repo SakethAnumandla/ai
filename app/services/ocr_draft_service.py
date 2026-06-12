@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.models import (
     Expense,
+    ExpenseApproval,
     ExpenseStatus,
     MainCategory,
     OCRBatch,
@@ -110,12 +111,25 @@ def build_full_prefill_from_expense(
     return enrich_prefill_dict(prefill)
 
 
+def reset_rejected_expense_for_rescan(db: Session, expense: Expense) -> None:
+    """Re-upload on a rejected bill → draft again and clear prior rejection workflow."""
+    if expense.status != ExpenseStatus.REJECTED:
+        return
+    expense.status = ExpenseStatus.DRAFT
+    expense.rejection_reason = None
+    expense.approved_at = None
+    db.query(ExpenseApproval).filter(ExpenseApproval.expense_id == expense.id).delete(
+        synchronize_session=False
+    )
+
+
 def apply_ocr_extract_to_expense(
     db: Session,
     expense: Expense,
     extracted: dict,
     prefill: dict,
 ) -> None:
+    reset_rejected_expense_for_rescan(db, expense)
     vendor = extracted.get("vendor_name") or extracted.get("restaurant_name")
     expense.bill_name = prefill["bill_name"]
     expense.bill_amount = prefill["bill_amount"]
@@ -447,7 +461,11 @@ def create_ocr_draft(
     if file_hash:
         existing = find_expense_by_file_hash(db, user_id, file_hash)
         if existing:
-            if force_rescan or expense_needs_ocr_refresh(existing):
+            if (
+                existing.status == ExpenseStatus.REJECTED
+                or force_rescan
+                or expense_needs_ocr_refresh(existing)
+            ):
                 refresh_expense = existing
             else:
                 return (

@@ -1,4 +1,5 @@
 .env
+.env.docker.local
 .venv/
 venv/
 __pycache__/
@@ -7,5 +8,6 @@ __pycache__/
 .DS_Store
 *.pem
 ca.pem
+*.dump
 docker/pgadmin/pgpass
 docker/pgadmin/servers.json

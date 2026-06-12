@@ -79,6 +79,56 @@ def slot_question(slot: str) -> str:
         f"Could you confirm the {slot.replace('_', ' ')}?",
     )
 
+
+def _detect_creation_mode(text: str) -> Optional[str]:
+    if _MANUAL_CHOICE_RE.search(text or ""):
+        return "manual"
+    if _UPLOAD_CHOICE_RE.search(text or ""):
+        return "ocr"
+    return None
+
+
+def _detect_multi_bill_labels(text: str) -> List[str]:
+    m = _MULTI_BILL_RE.search(text or "")
+    if not m:
+        return []
+    groups = [g for g in m.groups() if g]
+    if len(groups) >= 2:
+        return [groups[0].lower(), groups[1].lower()]
+    return []
+
+
+def merge_ocr_prefill_into_state(
+    state: ConversationWorkflowState,
+    prefill: Dict[str, Any],
+    *,
+    expense_id: Optional[int] = None,
+) -> ConversationWorkflowState:
+    """Mid-manual upload: OCR overwrites collected slots with scanned values."""
+    mapping = {
+        "bill_name": prefill.get("bill_name"),
+        "bill_amount": prefill.get("bill_amount"),
+        "vendor_name": prefill.get("vendor_name") or prefill.get("restaurant_name"),
+        "main_category": prefill.get("main_category"),
+        "sub_category": prefill.get("sub_category"),
+        "payment_method": prefill.get("payment_method"),
+        "description": prefill.get("description"),
+        "bill_date": prefill.get("bill_date"),
+    }
+    for key, val in mapping.items():
+        if val is not None and val != "":
+            state.slots[key] = val
+    if expense_id:
+        state.expense_id = expense_id
+        state.slots["expense_id"] = expense_id
+    state.slots["creation_mode"] = "ocr"
+    state.slots.pop(_MANUAL_ATTACHMENT_SLOT, None)
+    state.slots.pop(_CREATION_MODE_SLOT, None)
+    sm = ConversationStateMachine()
+    state.pending_slots = sm._recompute_pending_slots(state.slots)
+    state.updated_at = datetime.utcnow()
+    return state
+
 _CREATE_PATTERNS = [
     re.compile(r"\b(add|create|log|record|save)\b.*\b(expense|bill|receipt)\b", re.I),
     re.compile(r"\b(save|add|log|record)\s+it\s+to\s+(?:the\s+)?expense", re.I),
@@ -97,6 +147,36 @@ _IMMEDIATE_SUBMIT_RE = re.compile(
 )
 
 _SUBMIT_CONFIRM_SLOT = "_awaiting_submit_confirm"
+_CREATION_MODE_SLOT = "_awaiting_creation_mode"
+_MANUAL_ATTACHMENT_SLOT = "_awaiting_attachment"
+_MULTI_BILL_QUEUE_SLOT = "_multi_bill_queue"
+
+_CREATION_MODE_QUESTION = (
+    "How would you like to create this expense?\n\n"
+    "• **Upload** — attach a receipt image or PDF (I'll scan it with OCR)\n"
+    "• **Manual** — enter details step by step\n\n"
+    "You can use the 📎 button anytime to attach a bill."
+)
+
+_OCR_WAIT_MESSAGE = (
+    "Please attach your receipt (image or PDF) using the 📎 button. "
+    "I'll extract all the details automatically."
+)
+
+_MANUAL_ATTACHMENT_QUESTION = (
+    "Almost done! Attach a receipt with 📎 (optional), or reply **skip** to continue."
+)
+
+_UPLOAD_CHOICE_RE = re.compile(
+    r"\b(upload|attach|ocr|scan|pdf|image|receipt|photo|picture)\b", re.I
+)
+_MANUAL_CHOICE_RE = re.compile(
+    r"\b(manual|manually|type|enter|step\s*by\s*step)\b", re.I
+)
+_MULTI_BILL_RE = re.compile(
+    r"\b(\w+)\s+expense\s+and\s+(\w+)\s+expense\b|\b(travel|meal|meals|food|lunch|dinner|hotel|cab|fuel)\b\s+and\s+\b(travel|meal|meals|food|lunch|dinner|hotel|cab|fuel)\b",
+    re.I,
+)
 
 _CONTINUE_PATTERNS = [
     re.compile(r"\bcontinue\b.*\b(expense|draft)\b", re.I),
@@ -204,7 +284,10 @@ class ConversationStateMachine:
         prefill: Optional[Dict[str, Any]] = None,
     ) -> ConversationWorkflowState:
         entities = ExpenseEntityExtractor().extract(text)
+        multi_labels = _detect_multi_bill_labels(text)
         label = _extract_expense_label(text) or entities.bill_name or "expense"
+        if multi_labels:
+            label = multi_labels[0]
         if bill_name_needs_repair(label) and entities.bill_name:
             label = entities.bill_name
         slots: Dict[str, Any] = {
@@ -227,6 +310,13 @@ class ConversationStateMachine:
                     continue
                 slots[k] = v
 
+        if multi_labels and len(multi_labels) > 1:
+            slots[_MULTI_BILL_QUEUE_SLOT] = multi_labels[1:]
+
+        mode = _detect_creation_mode(text) or (prefill or {}).get("creation_mode")
+        if mode:
+            slots["creation_mode"] = mode
+
         state = ConversationWorkflowState(
             workflow_type=WorkflowType.EXPENSE_CREATE,
             scope=WorkflowScope.EXPENSE,
@@ -235,6 +325,11 @@ class ConversationStateMachine:
             session_id=session_id,
         )
         self._merge_entities_from_message(state, text, entities=entities)
+        if not mode and not prefill:
+            state.slots[_CREATION_MODE_SLOT] = True
+            state.pending_slots = []
+        elif mode == "ocr":
+            state.pending_slots = []
         return state
 
     def start_from_draft(self, draft: DraftExpenseContext, *, session_id: Optional[str] = None) -> ConversationWorkflowState:
@@ -345,6 +440,57 @@ class ConversationStateMachine:
             clear_state=False,
         )
 
+    def _handle_creation_mode_reply(
+        self, state: ConversationWorkflowState, text: str
+    ) -> Optional[StateMachineResult]:
+        if not state.slots.get(_CREATION_MODE_SLOT):
+            return None
+        mode = _detect_creation_mode(text)
+        if not mode:
+            return StateMachineResult(
+                handled=True,
+                assistant_message=_CREATION_MODE_QUESTION,
+                updated_state=state,
+            )
+        state.slots.pop(_CREATION_MODE_SLOT, None)
+        state.slots["creation_mode"] = mode
+        if mode == "ocr":
+            state.pending_slots = []
+            return StateMachineResult(
+                handled=True,
+                assistant_message=_OCR_WAIT_MESSAGE,
+                updated_state=state,
+            )
+        state.pending_slots = self._recompute_pending_slots(state.slots)
+        next_slot = state.pending_slots[0] if state.pending_slots else None
+        intro = "Sure — let's enter the details manually."
+        if state.slots.get(_MULTI_BILL_QUEUE_SLOT):
+            queue = state.slots[_MULTI_BILL_QUEUE_SLOT]
+            if queue:
+                intro += f" We'll do **{state.slots.get('bill_name', 'expense')}** first, then **{queue[0]}**."
+        return StateMachineResult(
+            handled=True,
+            assistant_message=(
+                f"{intro} {slot_question(next_slot)}" if next_slot else intro
+            ),
+            updated_state=state,
+        )
+
+    def _handle_manual_attachment_reply(
+        self, state: ConversationWorkflowState, text: str
+    ) -> Optional[StateMachineResult]:
+        if not state.slots.get(_MANUAL_ATTACHMENT_SLOT):
+            return None
+        lowered = (text or "").strip().lower()
+        if lowered in ("skip", "no", "none", "later", "continue", "next"):
+            state.slots.pop(_MANUAL_ATTACHMENT_SLOT, None)
+            return self._offer_submit_confirmation(state, text)
+        return StateMachineResult(
+            handled=True,
+            assistant_message=_MANUAL_ATTACHMENT_QUESTION,
+            updated_state=state,
+        )
+
     def _handle_pending_submit_reply(
         self, state: ConversationWorkflowState, text: str
     ) -> Optional[StateMachineResult]:
@@ -375,6 +521,18 @@ class ConversationStateMachine:
     ) -> StateMachineResult:
         if state is None and (self.should_start_create(text) or describes_new_expense(text)):
             state = self.start_expense_create(text, session_id=session_id, prefill=prefill)
+            if state.slots.get(_CREATION_MODE_SLOT):
+                return StateMachineResult(
+                    handled=True,
+                    assistant_message=_CREATION_MODE_QUESTION,
+                    updated_state=state,
+                )
+            if state.slots.get("creation_mode") == "ocr" and not state.slots.get("expense_id"):
+                return StateMachineResult(
+                    handled=True,
+                    assistant_message=_OCR_WAIT_MESSAGE,
+                    updated_state=state,
+                )
             if not state.pending_slots:
                 return self._offer_submit_confirmation(state, text)
             next_slot = state.pending_slots[0] if state.pending_slots else None
@@ -392,6 +550,21 @@ class ConversationStateMachine:
 
         if state is None:
             return StateMachineResult(handled=False)
+
+        if state.slots.get("creation_mode") == "ocr" and not state.slots.get("expense_id"):
+            return StateMachineResult(
+                handled=True,
+                assistant_message=_OCR_WAIT_MESSAGE,
+                updated_state=state,
+            )
+
+        mode_reply = self._handle_creation_mode_reply(state, text)
+        if mode_reply is not None:
+            return mode_reply
+
+        attach_reply = self._handle_manual_attachment_reply(state, text)
+        if attach_reply is not None:
+            return attach_reply
 
         pending_submit = self._handle_pending_submit_reply(state, text)
         if pending_submit is not None:
@@ -448,6 +621,17 @@ class ConversationStateMachine:
             self._apply_food_sub_category_inference(state.slots)
 
         if not state.pending_slots:
+            if (
+                state.slots.get("creation_mode") == "manual"
+                and not state.slots.get(_MANUAL_ATTACHMENT_SLOT)
+                and not state.slots.get("expense_id")
+            ):
+                state.slots[_MANUAL_ATTACHMENT_SLOT] = True
+                return StateMachineResult(
+                    handled=True,
+                    assistant_message=_MANUAL_ATTACHMENT_QUESTION,
+                    updated_state=state,
+                )
             return self._offer_submit_confirmation(state, text)
 
         next_slot = state.pending_slots[0]
@@ -477,7 +661,14 @@ class ConversationStateMachine:
 
         self._apply_food_sub_category_inference(state.slots)
         args = dict(state.slots)
-        for internal in (_SUBMIT_CONFIRM_SLOT, "_source_utterance"):
+        for internal in (
+            _SUBMIT_CONFIRM_SLOT,
+            _CREATION_MODE_SLOT,
+            _MANUAL_ATTACHMENT_SLOT,
+            _MULTI_BILL_QUEUE_SLOT,
+            "_source_utterance",
+            "creation_mode",
+        ):
             args.pop(internal, None)
         bill_name = args.pop("bill_name", "expense")
         payment_method = args.pop("payment_method", None)

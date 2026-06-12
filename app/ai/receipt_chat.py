@@ -7,6 +7,8 @@ from typing import Any, Dict, List, Optional
 
 from sqlalchemy.orm import Session
 
+from app.ai.chat_ui import build_expense_preview_cards, format_preview_message
+from app.ai.schemas.chat_ui import ExpensePreviewCard
 from app.ai.schemas.memory import DraftExpenseContext
 from app.intelligence.receipt.pipeline import ReceiptIntelligencePipeline
 from app.intelligence.schemas import ReceiptPipelineResult
@@ -32,9 +34,11 @@ class ChatReceiptScanOutcome:
     results: List[ReceiptPipelineResult] = field(default_factory=list)
     errors: List[str] = field(default_factory=list)
     draft_contexts: List[DraftExpenseContext] = field(default_factory=list)
+    expense_previews: List[ExpensePreviewCard] = field(default_factory=list)
     intent_message: str = ""
     persist_message: str = ""
     llm_user_content: str = ""
+    assistant_hint: str = ""
 
 
 def _format_one_result(index: int, result: ReceiptPipelineResult) -> List[str]:
@@ -145,6 +149,8 @@ def run_chat_receipt_scans(
     intent, persist, llm = build_chat_messages(
         outcome.results, outcome.errors, user_message
     )
+    outcome.expense_previews = build_expense_preview_cards(db, outcome.results)
+    outcome.assistant_hint = format_preview_message(outcome.expense_previews)
     outcome.intent_message = intent
     outcome.persist_message = persist
     outcome.llm_user_content = llm

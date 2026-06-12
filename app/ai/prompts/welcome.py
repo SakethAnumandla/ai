@@ -1,14 +1,14 @@
 """Fixed session welcome shown when the user opens chat."""
 
 CHAT_WELCOME_MESSAGE = (
-    "Hey! 👋 I'm Bizwy AI.\n\n"
-    "I can help with:\n"
-    "• Expenses\n"
-    "• Approvals\n"
-    "• Reimbursements\n"
-    "• Analytics\n"
-    "• Executive insights\n\n"
-    "Or feel free to ask me anything."
+    "Hey! 👋 I'm Bizwy AI — your expense assistant.\n\n"
+    "To **create an expense**, you can:\n"
+    "• **Upload** a receipt (image or PDF) using 📎 — I'll scan it with OCR\n"
+    "• **Enter manually** — say *\"create expense manually\"* and I'll ask each field\n"
+    "• **Mix both** — start manually and attach a bill anytime to auto-fill\n\n"
+    "You can log **multiple bills** in one chat (e.g. travel and meals). "
+    "Incomplete entries are saved as **drafts** until you submit.\n\n"
+    "I also help with approvals, reimbursements, and analytics. What would you like to do?"
 )
 
 WELCOME_MESSAGE_METADATA = {"welcome": True}

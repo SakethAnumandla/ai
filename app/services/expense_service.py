@@ -264,7 +264,7 @@ class ExpenseService:
         return expense
     
     def delete_expense(self, expense_id: int, user_id: int) -> bool:
-        """Delete an expense. Reverts wallet if it was approved (had a wallet transaction)."""
+        """Delete an expense (not allowed for approved bills)."""
 
         expense = self.get_expense(expense_id, user_id)
         if not expense:
@@ -273,8 +273,9 @@ class ExpenseService:
                 detail="Expense not found",
             )
 
-        if expense.status == ExpenseStatus.APPROVED:
-            WalletService(self.db).revert_transaction(expense_id)
+        from app.utils.expense_validation import assert_expense_deletable
+
+        assert_expense_deletable(expense)
 
         self.db.delete(expense)
         self.db.commit()

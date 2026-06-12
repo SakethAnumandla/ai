@@ -216,7 +216,11 @@ async def _confirm_existing_draft(
     expense = svc.get_expense(expense_id, user.id)
     if not expense:
         return ToolResult.fail("Expense not found", error="not_found")
-    if expense.status not in (ExpenseStatus.DRAFT, ExpenseStatus.PENDING):
+    if expense.status not in (
+        ExpenseStatus.DRAFT,
+        ExpenseStatus.PENDING,
+        ExpenseStatus.REJECTED,
+    ):
         return ToolResult.fail(
             f"Cannot update expense in status {expense.status.value}",
             error="invalid_status",
@@ -298,13 +302,19 @@ async def _confirm_existing_draft(
     if not save_as_draft and expense.status in (
         ExpenseStatus.DRAFT,
         ExpenseStatus.PENDING,
+        ExpenseStatus.REJECTED,
     ):
         expense = svc.submit_for_approval(expense_id, user.id)
 
+    status_note = (
+        " and submitted for approval"
+        if expense.status == ExpenseStatus.SUBMITTED
+        else ""
+    )
     return ToolResult.ok(
         message=(
-            f"Confirmed draft expense #{expense.id} "
-            f"({expense.bill_name}, ₹{expense.bill_amount:,.2f})."
+            f"Confirmed expense #{expense.id} "
+            f"({expense.bill_name}, ₹{expense.bill_amount:,.2f}){status_note}."
         ),
         data={
             "expense_id": expense.id,
@@ -331,6 +341,7 @@ async def handle_expense_submit_v1(
         ExpenseStatus.DRAFT,
         ExpenseStatus.PENDING,
         ExpenseStatus.SUBMITTED,
+        ExpenseStatus.REJECTED,
     ):
         return ToolResult.fail(
             f"Cannot submit expense in status {expense.status.value}",

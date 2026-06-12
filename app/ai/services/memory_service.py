@@ -414,6 +414,12 @@ class MemoryService:
     async def set_draft_expense(self, ctx: SessionContext, draft: DraftExpenseContext) -> None:
         await self._store.set_draft_expense(ctx, draft)
 
+    async def get_draft_expenses(self, ctx: SessionContext) -> List[DraftExpenseContext]:
+        if hasattr(self._store, "get_draft_expenses"):
+            return await self._store.get_draft_expenses(ctx)
+        one = await self._store.get_draft_expense(ctx)
+        return [one] if one else []
+
     async def clear_draft_expense(self, ctx: SessionContext) -> None:
         if hasattr(self._store, "clear_draft_expense"):
             await self._store.clear_draft_expense(ctx)

@@ -32,7 +32,10 @@ class WorkflowContinuityService:
     def _latest_db_draft(self, user_id: int) -> Optional[Expense]:
         return (
             self._db.query(Expense)
-            .filter(Expense.user_id == user_id, Expense.status == ExpenseStatus.DRAFT)
+            .filter(
+                Expense.user_id == user_id,
+                Expense.status.in_((ExpenseStatus.DRAFT, ExpenseStatus.REJECTED)),
+            )
             .order_by(Expense.updated_at.desc(), Expense.created_at.desc())
             .first()
         )

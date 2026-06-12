@@ -14,6 +14,7 @@ from app.ai.schemas.workflow import ConversationWorkflowState
 logger = logging.getLogger(__name__)
 
 _DRAFT_KEY = "session:draft_expense"
+_DRAFTS_LIST_KEY = "session:draft_expenses_list"
 _INTENT_KEY = "session:pending_intent"
 _WORKFLOW_KEY = "workflow:state"
 
@@ -108,6 +109,51 @@ class ResilientMemoryStore:
                 importance=1.0,
             ),
         )
+        await self.add_draft_expense_to_list(ctx, draft)
+
+    async def add_draft_expense_to_list(
+        self,
+        ctx: SessionContext,
+        draft: DraftExpenseContext,
+    ) -> None:
+        """Track multiple draft bills per chat session (multi-file / multi-intent)."""
+        existing = await self.get_draft_expenses(ctx)
+        merged: List[DraftExpenseContext] = []
+        if draft.expense_id:
+            replaced = False
+            for item in existing:
+                if item.expense_id == draft.expense_id:
+                    merged.append(draft)
+                    replaced = True
+                else:
+                    merged.append(item)
+            if not replaced:
+                merged.append(draft)
+        else:
+            merged = [*existing, draft]
+        payload = [draft_context_to_storage(d) for d in merged]
+        tu = TenantUserContext(tenant_id=ctx.tenant_id, user_id=ctx.user_id)
+        await asyncio.to_thread(
+            self._repo.save_memory,
+            tu,
+            MemoryEntryCreate(
+                memory_type=MemoryType.CONTEXT,
+                memory_key=_scoped_key(_DRAFTS_LIST_KEY, ctx),
+                value={"drafts": payload},
+                importance=1.0,
+            ),
+        )
+
+    async def get_draft_expenses(self, ctx: SessionContext) -> List[DraftExpenseContext]:
+        tu = TenantUserContext(tenant_id=ctx.tenant_id, user_id=ctx.user_id)
+        key = _scoped_key(_DRAFTS_LIST_KEY, ctx)
+        rows = await asyncio.to_thread(self._repo.fetch_memories, tu, limit=20)
+        for row in rows:
+            if row.memory_key == key:
+                raw = (row.value or {}).get("drafts") or []
+                return [DraftExpenseContext.model_validate(item) for item in raw]
+        active = await self.get_draft_expense(ctx)
+        return [active] if active else []
 
     async def clear_draft_expense(self, ctx: SessionContext) -> None:
         if self.redis_available:

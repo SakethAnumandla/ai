@@ -2,6 +2,7 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
+from app.ai.schemas.chat_ui import ChatUIAction, ExpensePreviewCard
 from app.ai.schemas.classification import ResponseClassificationOut
 from app.ai.schemas.conversation import ConversationMessageOut
 
@@ -20,3 +21,6 @@ class ChatResponse(BaseModel):
     requires_confirmation: bool = False
     confirmation_token: Optional[str] = None
     tool_results: Optional[List[Dict[str, Any]]] = None
+    attachments_enabled: bool = True
+    expense_previews: Optional[List[ExpensePreviewCard]] = None
+    ui_actions: Optional[List[ChatUIAction]] = None

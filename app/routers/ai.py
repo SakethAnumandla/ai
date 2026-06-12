@@ -5,10 +5,12 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, UploadFile, status
 from sqlalchemy.orm import Session
 
+from app.ai.chat_ui import global_attach_action
 from app.ai.chat_attachments import (
     build_chat_attachment_bundle,
     build_chat_attachment_bundle_from_file_infos,
 )
+from app.ai.conversation.state_machine import merge_ocr_prefill_into_state
 from app.ai.dependencies import (
     get_ai_memory_service,
     get_ai_orchestrator,
@@ -18,6 +20,7 @@ from app.ai.dead_letter.service import DeadLetterQueueService
 from app.ai.orchestrator.base import AIOrchestrator
 from app.ai.receipt_chat import is_receipt_file, run_chat_receipt_scans
 from app.ai.schemas.chat import ChatRequest, ChatResponse
+from app.ai.schemas.chat_ui import ChatUIAction, ExpensePreviewCard
 from app.ai.schemas.conversation import ConversationMessageOut
 from app.ai.security import build_session_context, resolve_tenant_id
 from app.ai.services.memory_service import MemoryService
@@ -32,6 +35,35 @@ from app.utils.file_upload import process_multiple_files
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/ai", tags=["ai"])
+
+
+def _build_chat_response(
+    result: dict,
+    *,
+    expense_previews: Optional[List[ExpensePreviewCard]] = None,
+    ui_actions: Optional[List[ChatUIAction]] = None,
+) -> ChatResponse:
+    msg = result["message"]
+    actions = list(ui_actions or [])
+    if not any(a.action == "attach" for a in actions):
+        actions.insert(0, global_attach_action())
+    return ChatResponse(
+        message=(
+            msg
+            if isinstance(msg, ConversationMessageOut)
+            else ConversationMessageOut.model_validate(msg)
+        ),
+        session_id=result["session_id"],
+        request_id=result.get("request_id"),
+        trace_id=result.get("trace_id"),
+        classification=result.get("classification"),
+        requires_confirmation=bool(result.get("requires_confirmation")),
+        confirmation_token=result.get("confirmation_token"),
+        tool_results=result.get("tool_results"),
+        attachments_enabled=True,
+        expense_previews=expense_previews,
+        ui_actions=actions,
+    )
 
 
 def _upload_files_from_form(form) -> List[UploadFile]:
@@ -53,17 +85,7 @@ async def ai_chat_welcome(
     """Fixed opening message when the user opens a chat session."""
     ctx = build_session_context(user, session_id)
     result = await orchestrator.ensure_session_welcome(ctx, user=user)
-    msg = result["message"]
-    return ChatResponse(
-        message=msg if isinstance(msg, ConversationMessageOut) else ConversationMessageOut.model_validate(msg),
-        session_id=result["session_id"],
-        request_id=result.get("request_id"),
-        trace_id=result.get("trace_id"),
-        classification=result.get("classification"),
-        requires_confirmation=False,
-        confirmation_token=None,
-        tool_results=None,
-    )
+    return _build_chat_response(result)
 
 
 @router.post("/chat", response_model=ChatResponse)
@@ -76,17 +98,7 @@ async def ai_chat(
     result = await orchestrator.handle_user_message(
         ctx, body.message, user=user
     )
-    msg = result["message"]
-    return ChatResponse(
-        message=msg if isinstance(msg, ConversationMessageOut) else ConversationMessageOut.model_validate(msg),
-        session_id=result["session_id"],
-        request_id=result.get("request_id"),
-        trace_id=result.get("trace_id"),
-        classification=result.get("classification"),
-        requires_confirmation=bool(result.get("requires_confirmation")),
-        confirmation_token=result.get("confirmation_token"),
-        tool_results=result.get("tool_results"),
-    )
+    return _build_chat_response(result)
 
 
 @router.post("/chat/upload", response_model=ChatResponse)
@@ -127,11 +139,21 @@ async def ai_chat_with_attachments(
     persist_message = ""
     llm_user_content: Optional[object] = None
     scan_tool_results: Optional[list] = None
+    expense_previews: Optional[List[ExpensePreviewCard]] = None
+    preview_hint = ""
+
+    workflow_state = await memory.get_workflow_state(ctx)
+    merge_into_workflow = bool(
+        workflow_state is not None
+        and workflow_state.slots.get("creation_mode") == "manual"
+    )
 
     if receipt_infos:
         scan = run_chat_receipt_scans(db, user, receipt_infos, user_message=message)
         for draft in scan.draft_contexts:
             await memory.set_draft_expense(ctx, draft)
+        expense_previews = scan.expense_previews or None
+        preview_hint = scan.assistant_hint
         intent_message = scan.intent_message
         persist_message = scan.persist_message
         llm_user_content = scan.llm_user_content
@@ -147,6 +169,22 @@ async def ai_chat_with_attachments(
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail="; ".join(scan.errors),
+            )
+
+        if merge_into_workflow and scan.results:
+            prefill = scan.results[-1].prefill or {}
+            expense_id = scan.results[-1].expense_id
+            merged = merge_ocr_prefill_into_state(
+                workflow_state,
+                prefill,
+                expense_id=expense_id,
+            )
+            await memory.set_workflow_state(ctx, merged)
+            if scan.draft_contexts:
+                await memory.set_draft_expense(ctx, scan.draft_contexts[-1])
+            preview_hint = (
+                "I've scanned your receipt and updated the expense details. "
+                "Review the preview below, then **Edit** any field or **Submit**."
             )
 
     if non_receipt_infos:
@@ -178,9 +216,8 @@ async def ai_chat_with_attachments(
     if len(persist_message) > 32000:
         persist_message = persist_message[:31900] + "\n…[truncated]"
 
-    # Receipt OCR already saved a draft — let the copilot respond from scan summary,
-    # not the slot-filling state machine (avoids KeyError on OCR field names like "merchant").
-    skip_workflow = bool(scan_tool_results)
+    # OCR path skips slot machine unless merging into an active manual workflow.
+    skip_workflow = bool(scan_tool_results) and not merge_into_workflow
 
     result = await orchestrator.handle_user_message(
         ctx,
@@ -194,16 +231,23 @@ async def ai_chat_with_attachments(
         existing = list(result.get("tool_results") or [])
         result["tool_results"] = existing + scan_tool_results
 
-    msg = result["message"]
-    return ChatResponse(
-        message=msg if isinstance(msg, ConversationMessageOut) else ConversationMessageOut.model_validate(msg),
-        session_id=result["session_id"],
-        request_id=result.get("request_id"),
-        trace_id=result.get("trace_id"),
-        classification=result.get("classification"),
-        requires_confirmation=bool(result.get("requires_confirmation")),
-        confirmation_token=result.get("confirmation_token"),
-        tool_results=result.get("tool_results"),
+    if preview_hint and expense_previews:
+        msg = result.get("message")
+        if isinstance(msg, ConversationMessageOut):
+            msg.content = preview_hint
+        elif isinstance(msg, dict):
+            msg["content"] = preview_hint
+        result["message"] = msg
+
+    card_actions: List[ChatUIAction] = []
+    if expense_previews:
+        for card in expense_previews:
+            card_actions.extend(card.actions)
+
+    return _build_chat_response(
+        result,
+        expense_previews=expense_previews,
+        ui_actions=card_actions or None,
     )
 
 
