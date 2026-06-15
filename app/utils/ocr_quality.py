@@ -14,20 +14,20 @@ class OcrScanUnreadable(Exception):
 
 _USER_MESSAGES = {
     "no_text": (
-        "Couldn't read receipt. Please retake the photo in good lighting "
-        "with the receipt flat and in focus, then upload again."
+        "Couldn't read this receipt. Please upload a clearer photo in good lighting "
+        "with the receipt flat and in focus."
     ),
     "image_too_blurry": (
-        "Couldn't read receipt — this photo looks too blurry. "
-        "Please retake it with the receipt flat, in focus, and well lit."
+        "Couldn't read this receipt — the image looks too unclear. "
+        "Please upload a sharper copy with the receipt flat and well lit."
     ),
     "parse_failed": (
-        "Couldn't read receipt. We couldn't identify the amount or merchant — "
-        "please retake the photo or upload a clearer copy."
+        "Couldn't read this receipt. We couldn't identify the amount or merchant — "
+        "please upload a clearer image or PDF."
     ),
     "low_confidence": (
-        "Couldn't read receipt — scan confidence was too low. "
-        "Please retake the photo and try again."
+        "Couldn't read this receipt — confidence was too low. "
+        "Please upload a clearer copy and try again."
     ),
 }
 
@@ -49,7 +49,7 @@ def _quality_payload(
 
 def assess_ocr_scan_quality(extracted: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Classify OCR output as good / partial / unreadable.
+    Classify vision scan output as good / partial / unreadable.
     Blur alone does not fail a scan when amounts and vendor were parsed cleanly.
     """
     raw = (extracted.get("raw_text") or "").strip()
@@ -79,7 +79,7 @@ def assess_ocr_scan_quality(extracted: Dict[str, Any]) -> Dict[str, Any]:
     )
     parse_ok = parse_signals >= 2 or (has_amount and text_len >= 25)
 
-    if text_len < 12:
+    if text_len < 12 and not (has_amount and has_vendor):
         return _quality_payload(
             "unreadable",
             retake_recommended=True,

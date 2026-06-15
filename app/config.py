@@ -29,22 +29,18 @@ class Settings(BaseSettings):
     db_pool_recycle: int = 1800
     db_pool_timeout: int = 30
     db_pool_pre_ping: bool = True
-    # Celery workers: one connection per task (set CELERY_WORKER=1 in worker container)
     db_use_null_pool: bool = False
     upload_dir: str = "/tmp/bizwy-uploads"
     max_upload_size: int = 10485760
     allowed_extensions: List[str] = ["jpg", "jpeg", "png", "pdf", "webp", "avi"]
-    ocr_api_key: str = ""
-    ocr_timeout: int = 30
-    paddle_ocr_preload: bool = True
-    redis_url: str = "redis://localhost:6379"
-    redis_enabled: bool = False
 
     # OpenAI / AI
     openai_api_key: str = ""
     openai_model: str = "gpt-4o-mini"  # alias for primary; prefer openai_primary_model
     openai_primary_model: str = "gpt-4o-mini"
     openai_fallback_model: str = "gpt-4.1-mini"
+    openai_vision_model: str = "gpt-4o-mini"
+    openai_vision_timeout_seconds: float = 90.0
     openai_timeout_seconds: float = 60.0
     openai_max_retries: int = 3
     openai_temperature: float = 0.55
@@ -60,7 +56,7 @@ class Settings(BaseSettings):
     # Idempotency (seconds)
     ai_idempotency_ttl_seconds: int = 86400
 
-    # Redis memory TTLs (seconds)
+    # Session memory TTLs (seconds; reserved for future expiry policies)
     ai_session_ttl_seconds: int = 3600
     ai_draft_expense_ttl_seconds: int = 7200
     ai_pending_intent_ttl_seconds: int = 1800
@@ -119,11 +115,8 @@ class Settings(BaseSettings):
         "video/webm",
     ]
 
-    # Phase 4 — Receipt OCR
-    ocr_provider: str = "paddleocr"  # paddleocr | tesseract (alias) | gpt4o_vision | textract | google_vision
-    paddle_ocr_lang: str = "en"
-    paddle_ocr_use_gpu: bool = False
-    paddle_ocr_use_angle_cls: bool = True
+    # Receipt / document scanning (LLM vision)
+    ocr_provider: str = "gpt4o_vision"
     ocr_field_confidence_threshold: float = 0.65
     ocr_overall_confidence_threshold: float = 0.55
     ocr_human_review_threshold: float = 0.60
@@ -164,11 +157,6 @@ class Settings(BaseSettings):
     ocr_locale_normalization_enabled: bool = False
     voice_biometric_enabled: bool = False
 
-    # Phase 4 — Celery
-    celery_broker_url: str = ""
-    celery_result_backend: str = ""
-    celery_task_always_eager: bool = False
-
     # CORS — comma-separated origins, or "*" for all (default)
     cors_origins: str = "*"
 
@@ -177,14 +165,6 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         extra="ignore",
     )
-
-    @property
-    def celery_broker(self) -> str:
-        return self.celery_broker_url or self.redis_url
-
-    @property
-    def celery_backend(self) -> str:
-        return self.celery_result_backend or self.redis_url
 
 settings = Settings()
 

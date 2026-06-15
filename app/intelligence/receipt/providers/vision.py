@@ -1,26 +1,33 @@
-"""GPT-4o Vision OCR provider (future — stub falls back to PaddleOCR)."""
-import logging
-from typing import Any, Dict, Optional
+"""GPT-4o vision receipt extraction provider."""
+from typing import Any, Dict, List
 
+from app.ai.vision_receipt import get_vision_extractor
 from app.intelligence.receipt.providers.base import BaseOCRProvider, OCRProviderKind
-from app.intelligence.receipt.providers.paddleocr import PaddleOCRProvider
-
-logger = logging.getLogger(__name__)
 
 
 class GPT4VisionOCRProvider(BaseOCRProvider):
-    """
-    Placeholder for OpenAI vision receipt extraction.
-    Set OPENAI_API_KEY and enable via OCR_PROVIDER=gpt4o_vision when implemented.
-    """
+    """OpenAI vision — primary receipt scanning backend."""
 
     kind = OCRProviderKind.GPT4O_VISION
 
-    def __init__(self, fallback: Optional[BaseOCRProvider] = None):
-        self._fallback = fallback or PaddleOCRProvider()
+    def __init__(self) -> None:
+        self._vision = get_vision_extractor()
 
     def extract(self, file_data: bytes, file_name: str, extension: str) -> Dict[str, Any]:
-        logger.info("gpt4o_vision.not_implemented using paddleocr fallback")
-        result = self._fallback.extract(file_data, file_name, extension)
-        result["ocr_provider"] = f"{self.name}_fallback_paddleocr"
-        return result
+        raw = self._vision.extract_sync(file_data, file_name, extension)
+        raw["ocr_provider"] = self.name
+        return self.normalize(raw)
+
+    def extract_pages(
+        self, file_data: bytes, file_name: str, extension: str
+    ) -> List[Dict[str, Any]]:
+        ext = extension.lower().lstrip(".")
+        raw = self._vision.extract_sync(file_data, file_name, ext)
+        raw["ocr_provider"] = self.name
+        page_extractions = raw.get("page_extractions") or []
+        if ext == "pdf" and page_extractions:
+            return [
+                self.normalize({**p, "ocr_provider": self.name, "_legacy": p})
+                for p in page_extractions
+            ]
+        return [self.normalize(raw)]

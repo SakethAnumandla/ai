@@ -70,10 +70,10 @@ class WorkflowContinuityService:
                 )
 
         tu = TenantUserContext(tenant_id=ctx.tenant_id, user_id=ctx.user_id)
-        redis_draft = await self._memory.get_draft_expense(ctx)
+        pg_draft = await self._memory.get_draft_expense(ctx)
         db_draft = self._latest_db_draft(ctx.user_id)
 
-        draft_ctx: Optional[DraftExpenseContext] = redis_draft
+        draft_ctx: Optional[DraftExpenseContext] = pg_draft
         if db_draft and (not draft_ctx or not draft_ctx.expense_id):
             draft_ctx = DraftExpenseContext(
                 expense_id=db_draft.id,

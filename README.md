@@ -19,7 +19,7 @@ Chat, long-term memory, summaries, audit logs, confirmations, idempotency, polic
 docker compose run --rm --no-deps backend python app/migrations/recreate_ai_postgres_tables.py
 ```
 
-**Redis** is optional (`REDIS_ENABLED=false` by default). AI data uses PostgreSQL only. Set `REDIS_ENABLED=true` and `REDIS_URL` if you want an extra session cache or run Celery workers locally.
+**PostgreSQL** is the sole storage for chat, memory, drafts, workflow state, and related AI tables.
 
 Main AI tables: `ai_conversations`, `ai_memory`, `ai_summaries`, `ai_actions`, `ai_memory_audit_events`, `ai_confirmations`, `ai_idempotency_keys`, `ai_model_config`, `ai_tool_permissions`, `ai_prompt_versions`, `ai_tenant_memory_policies`, `ai_job_dead_letters`, `tenant_ai_usage`.
 # backend_new

@@ -180,7 +180,7 @@ _EDIT_FIELD_ALIASES = {
 
 _CREATION_MODE_QUESTION = (
     "How would you like to create this expense?\n\n"
-    "• **Upload** — attach a receipt image or PDF (I'll scan it with OCR)\n"
+    "• **Upload** — attach a receipt image or PDF (I'll read it with AI vision)\n"
     "• **Manual** — enter details step by step\n\n"
     "You can use the 📎 button anytime to attach a bill."
 )

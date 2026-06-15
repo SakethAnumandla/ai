@@ -1,4 +1,4 @@
-"""Celery tasks for voice transcription and voice→chat pipeline."""
+"""Background jobs for voice transcription and voice→chat pipeline."""
 import base64
 import logging
 import uuid
@@ -6,7 +6,6 @@ import uuid
 from app.database import SessionLocal
 from app.intelligence.jobs.service import JobService
 from app.intelligence.schemas import JobStatus, VoiceChatResult
-from app.intelligence.tasks.celery_app import celery_app
 from app.intelligence.voice.audit import TranscriptionAuditService
 from app.intelligence.voice.transcription import TranscriptionService
 from app.intelligence.worker_factory import build_orchestrator
@@ -145,13 +144,3 @@ def run_voice_chat_job(job_id: int, user_id: int) -> dict:
         raise
     finally:
         db.close()
-
-
-@celery_app.task(name="intelligence.process_voice_transcribe", bind=True, max_retries=2)
-def process_voice_transcribe_task(self, job_id: int, user_id: int):
-    return run_voice_transcribe_job(job_id, user_id)
-
-
-@celery_app.task(name="intelligence.process_voice_chat", bind=True, max_retries=2)
-def process_voice_chat_task(self, job_id: int, user_id: int):
-    return run_voice_chat_job(job_id, user_id)

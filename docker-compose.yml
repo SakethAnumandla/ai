@@ -1,13 +1,7 @@
-# Production: backend + Redis. Set DATABASE_URL in .env (e.g. Aiven Postgres).
+# Production: backend only. Set DATABASE_URL in .env (e.g. Aiven Postgres).
 # Optional local Postgres: docker compose --profile local up -d
-# Celery workers:         docker compose --profile workers up -d
 
 services:
-  redis:
-    image: redis:7-alpine
-    ports:
-      - "6379:6379"
-
   backend:
     build: .
     platform: linux/amd64
@@ -18,18 +12,10 @@ services:
       - path: .env.docker.local
         required: false
     environment:
-      REDIS_ENABLED: "true"
-      REDIS_URL: redis://redis:6379
       DB_POOL_SIZE: "2"
       DB_MAX_OVERFLOW: "1"
       DB_POOL_RECYCLE: "1800"
-      PADDLE_OCR_PRELOAD: "false"
-      PADDLE_OCR_FAST_MODE: "true"
-      PADDLE_OCR_MAX_PASSES_CLEAR: "4"
-      PADDLE_OCR_MAX_PASSES_BLURRY: "7"
     depends_on:
-      redis:
-        condition: service_started
       postgres:
         condition: service_healthy
         required: false
@@ -40,26 +26,6 @@ services:
       timeout: 5s
       retries: 6
       start_period: 30s
-
-  celery_worker:
-    profiles: ["workers"]
-    build: .
-    platform: linux/amd64
-    command: celery -A app.intelligence.tasks.celery_app:celery_app worker --loglevel=info -Q celery --concurrency=2
-    env_file:
-      - .env
-    environment:
-      CELERY_WORKER: "1"
-      REDIS_ENABLED: "true"
-      REDIS_URL: redis://redis:6379
-      CELERY_BROKER_URL: redis://redis:6379/0
-      CELERY_RESULT_BACKEND: redis://redis:6379/1
-    depends_on:
-      redis:
-        condition: service_started
-      backend:
-        condition: service_healthy
-    restart: unless-stopped
 
   postgres:
     profiles: ["local"]

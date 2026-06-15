@@ -1,6 +1,6 @@
 """FastAPI dependency injection for AI services."""
 from functools import lru_cache
-from typing import AsyncGenerator, Optional
+from typing import Optional
 
 from fastapi import Depends
 from sqlalchemy.orm import Session
@@ -10,7 +10,6 @@ from app.ai.dead_letter.service import DeadLetterQueueService
 from app.ai.memory.context_builder import ContextBuilder
 from app.ai.copilot.preflight import CopilotPreflight
 from app.ai.idempotency.service import IdempotencyService
-from app.ai.memory.redis_store import RedisMemoryStore
 from app.ai.memory.resilient_store import ResilientMemoryStore
 from app.ai.memory.repository import AIRepository
 from app.ai.memory.token_budget import TokenBudgetManager
@@ -27,17 +26,8 @@ from app.ai.tools.executor import ToolExecutor
 from app.ai.tools.rate_limiter import ToolRateLimiter
 from app.database import get_db
 
-_redis_store: Optional[RedisMemoryStore] = None
 _session_lock_manager: Optional[SessionLockManager] = None
 _rate_limiter: Optional[ToolRateLimiter] = None
-
-
-async def get_redis_memory_store() -> AsyncGenerator[RedisMemoryStore, None]:
-    global _redis_store
-    if _redis_store is None:
-        _redis_store = RedisMemoryStore()
-        await _redis_store.connect()
-    yield _redis_store
 
 
 @lru_cache
@@ -63,15 +53,10 @@ def get_tool_rate_limiter() -> ToolRateLimiter:
     return _rate_limiter
 
 
-def get_session_lock_manager(
-    redis_store: RedisMemoryStore = Depends(get_redis_memory_store),
-) -> SessionLockManager:
+def get_session_lock_manager() -> SessionLockManager:
     global _session_lock_manager
-    client = redis_store._client if redis_store.is_connected else None
     if _session_lock_manager is None:
-        _session_lock_manager = SessionLockManager(redis_client=client)
-    elif client is not None and _session_lock_manager._redis is None:
-        _session_lock_manager._redis = client
+        _session_lock_manager = SessionLockManager()
     return _session_lock_manager
 
 
@@ -106,12 +91,11 @@ def get_context_builder() -> ContextBuilder:
 
 async def get_ai_memory_service(
     repo: AIRepository = Depends(get_ai_repository),
-    redis_store: RedisMemoryStore = Depends(get_redis_memory_store),
     openai: OpenAIService = Depends(get_openai_service),
     audit: AuditService = Depends(get_ai_audit_service),
     token_budget: TokenBudgetManager = Depends(get_token_budget_manager),
 ) -> MemoryService:
-    store = ResilientMemoryStore(redis_store, repo)
+    store = ResilientMemoryStore(repo)
     await store.connect()
     return MemoryService(repo, store, openai, audit, token_budget)
 
@@ -172,11 +156,8 @@ def get_ai_orchestrator(
     )
 
 
-async def shutdown_ai_redis() -> None:
-    global _redis_store, _session_lock_manager, _rate_limiter
-    if _redis_store:
-        await _redis_store.disconnect()
-        _redis_store = None
+async def shutdown_ai_services() -> None:
+    global _session_lock_manager, _rate_limiter
     _session_lock_manager = None
     _rate_limiter = None
     get_openai_service.cache_clear()

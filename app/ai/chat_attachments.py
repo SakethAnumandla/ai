@@ -1,11 +1,12 @@
 """Build OpenAI-ready multimodal content from chat uploads (images + PDF)."""
 import base64
-import io
 import logging
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Union
 
 from fastapi import HTTPException, UploadFile, status
+
+from app.ai.vision_receipt import file_bytes_to_vision_images, pdf_bytes_to_images
 
 logger = logging.getLogger(__name__)
 
@@ -17,7 +18,6 @@ ALLOWED_IMAGE_MIMES = frozenset(
 PDF_MIME = "application/pdf"
 MAX_FILES = 5
 PDF_MAX_PAGES = 12
-PDF_MAX_CHARS = 14000
 
 
 def _guess_image_mime(head: bytes, declared: Optional[str]) -> Optional[str]:
@@ -32,33 +32,6 @@ def _guess_image_mime(head: bytes, declared: Optional[str]) -> Optional[str]:
     if declared and declared.split(";")[0].strip().lower() in ALLOWED_IMAGE_MIMES:
         return declared.split(";")[0].strip().lower()
     return None
-
-
-def _extract_pdf_text(data: bytes) -> str:
-    try:
-        from pypdf import PdfReader
-    except ImportError:
-        return "[PDF parsing unavailable]"
-
-    try:
-        reader = PdfReader(io.BytesIO(data))
-        chunks: List[str] = []
-        for _, page in enumerate(reader.pages[:PDF_MAX_PAGES]):
-            t = page.extract_text() or ""
-            if t.strip():
-                chunks.append(t.strip())
-        full = "\n\n".join(chunks).strip()
-        if not full:
-            return (
-                "(No selectable text found in this PDF. It may be a scanned image — "
-                "ask the user to attach a photo or use the OCR bill scan endpoint.)"
-            )
-        if len(full) > PDF_MAX_CHARS:
-            return full[:PDF_MAX_CHARS] + "\n…[truncated]"
-        return full
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("pdf.extract_failed: %s", exc)
-        return f"(Could not read PDF: {exc})"
 
 
 @dataclass
@@ -84,16 +57,30 @@ def _build_bundle_from_bytes(
         )
 
     image_parts: List[tuple[str, str]] = []
-    pdf_summaries: List[str] = []
     names: List[str] = []
 
     for filename, raw, content_type in items:
         names.append(filename)
         ctype = (content_type or "").split(";")[0].strip().lower()
+        ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
 
-        if ctype == PDF_MIME or filename.lower().endswith(".pdf"):
-            text = _extract_pdf_text(raw)
-            pdf_summaries.append(f"--- {filename} ---\n{text}")
+        if ctype == PDF_MIME or ext == "pdf":
+            pages = pdf_bytes_to_images(raw, max_pages=PDF_MAX_PAGES)
+            if not pages:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail=f"Could not read PDF: {filename}",
+                )
+            for page_bytes, mime in pages:
+                b64 = base64.standard_b64encode(page_bytes).decode("ascii")
+                image_parts.append((mime, b64))
+            continue
+
+        vision_images = file_bytes_to_vision_images(raw, filename, ext)
+        if vision_images:
+            for page_bytes, mime in vision_images:
+                b64 = base64.standard_b64encode(page_bytes).decode("ascii")
+                image_parts.append((mime, b64))
             continue
 
         mime_guess = _guess_image_mime(raw[:32], content_type)
@@ -112,15 +99,17 @@ def _build_bundle_from_bytes(
     )
     persist_message = f"{base_text}\n{attach_note}".strip()
 
-    parts: List[Dict[str, Any]] = [{"type": "text", "text": base_text}]
-    if pdf_summaries:
-        parts.append(
-            {
-                "type": "text",
-                "text": "--- Extracted PDF text (may be partial) ---\n"
-                + "\n\n".join(pdf_summaries),
-            }
-        )
+    parts: List[Dict[str, Any]] = [
+        {
+            "type": "text",
+            "text": (
+                f"{base_text}\n\n"
+                "Read the attached receipt/invoice image(s) carefully. "
+                "Extract merchant, amount, date, and other visible fields. "
+                "Summarize what you see and help the user record or review the expense."
+            ),
+        }
+    ]
     for mime, b64 in image_parts:
         parts.append(
             {
@@ -142,7 +131,7 @@ def build_chat_attachment_bundle_from_file_infos(
     file_infos: List[dict],
     max_bytes_per_file: int,
 ) -> ChatAttachmentResult:
-    """Vision/PDF-text path using already-read upload bytes (e.g. GIF after OCR receipts)."""
+    """Vision path using already-read upload bytes."""
     if len(file_infos) > MAX_FILES:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -177,7 +166,6 @@ async def build_chat_attachment_bundle(
 
     `message` may be empty when files are present (caller should pass intent default separately).
     """
-    cleaned = (message or "").strip()
     if not files:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

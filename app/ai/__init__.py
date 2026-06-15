@@ -5,7 +5,6 @@ from app.ai.dependencies import (
     get_ai_memory_service,
     get_ai_audit_service,
     get_openai_service,
-    get_redis_memory_store,
 )
 
 __all__ = [
@@ -14,5 +13,4 @@ __all__ = [
     "get_ai_memory_service",
     "get_ai_audit_service",
     "get_openai_service",
-    "get_redis_memory_store",
 ]

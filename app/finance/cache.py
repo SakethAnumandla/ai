@@ -1,10 +1,9 @@
-"""Redis-backed analytics result cache (sync)."""
+"""In-process analytics result cache (sync)."""
 import hashlib
 import json
 import logging
-from typing import Any, Callable, Dict, Optional, TypeVar
-
-import redis
+import time
+from typing import Any, Callable, Dict, Optional, Tuple, TypeVar
 
 from app.config import settings
 from app.finance.scope import is_company_scope
@@ -18,31 +17,14 @@ T = TypeVar("T")
 class AnalyticsCache:
     """
     Cache expensive finance analytics (quarterly trends, vendors, departments).
-    Falls through to compute on miss or Redis unavailable.
+    Falls through to compute on miss or when caching is disabled.
     """
 
     PREFIX = "finance:analytics:"
 
-    def __init__(self, redis_url: Optional[str] = None):
-        self._url = redis_url or settings.redis_url
-        self._client: Optional[redis.Redis] = None
+    def __init__(self) -> None:
         self._enabled = settings.analytics_cache_enabled
-
-    def _get_client(self) -> Optional[redis.Redis]:
-        if not self._enabled or not settings.redis_enabled:
-            return None
-        if self._client is None:
-            try:
-                self._client = redis.from_url(
-                    self._url,
-                    encoding="utf-8",
-                    decode_responses=True,
-                )
-                self._client.ping()
-            except Exception as exc:
-                logger.warning("Analytics cache Redis unavailable: %s", exc)
-                self._client = None
-        return self._client
+        self._entries: Dict[str, Tuple[float, Dict[str, Any]]] = {}
 
     def build_key(
         self,
@@ -75,28 +57,24 @@ class AnalyticsCache:
         return mapping.get(report, settings.analytics_cache_ttl_default)
 
     def get(self, key: str) -> Optional[Dict[str, Any]]:
-        client = self._get_client()
-        if not client:
+        if not self._enabled:
             return None
-        try:
-            raw = client.get(key)
-            if raw:
-                data = json.loads(raw)
-                data["_cache"] = {"hit": True, "key": key}
-                return data
-        except Exception as exc:
-            logger.debug("cache get failed: %s", exc)
-        return None
+        entry = self._entries.get(key)
+        if not entry:
+            return None
+        expires_at, value = entry
+        if time.time() >= expires_at:
+            self._entries.pop(key, None)
+            return None
+        data = dict(value)
+        data["_cache"] = {"hit": True, "key": key}
+        return data
 
     def set(self, key: str, value: Dict[str, Any], *, ttl: int) -> None:
-        client = self._get_client()
-        if not client:
+        if not self._enabled:
             return
-        try:
-            payload = {k: v for k, v in value.items() if k != "_cache"}
-            client.setex(key, ttl, json.dumps(payload, default=str))
-        except Exception as exc:
-            logger.debug("cache set failed: %s", exc)
+        payload = {k: v for k, v in value.items() if k != "_cache"}
+        self._entries[key] = (time.time() + ttl, payload)
 
     def get_or_compute(
         self,
@@ -118,15 +96,14 @@ class AnalyticsCache:
         return result
 
     def invalidate_prefix(self, tenant_id: int, report: Optional[str] = None) -> int:
-        client = self._get_client()
-        if not client:
-            return 0
-        pattern = f"{self.PREFIX}{tenant_id}:{report or '*'}:*"
+        pattern = f"{self.PREFIX}{tenant_id}:{report or ''}"
         deleted = 0
-        try:
-            for key in client.scan_iter(match=pattern, count=100):
-                client.delete(key)
+        for key in list(self._entries):
+            if report:
+                if key.startswith(pattern):
+                    self._entries.pop(key, None)
+                    deleted += 1
+            elif key.startswith(f"{self.PREFIX}{tenant_id}:"):
+                self._entries.pop(key, None)
                 deleted += 1
-        except Exception as exc:
-            logger.warning("cache invalidate failed: %s", exc)
         return deleted

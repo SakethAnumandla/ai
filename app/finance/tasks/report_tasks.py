@@ -1,10 +1,9 @@
-"""Celery tasks for async finance report generation."""
+"""Background jobs for async finance report generation."""
 import logging
 
 from app.database import SessionLocal
 from app.intelligence.jobs.service import JobService
 from app.intelligence.schemas import JobStatus
-from app.intelligence.tasks.celery_app import celery_app
 from app.finance.report_generator import FinanceReportGenerator
 from app.models import User
 
@@ -66,8 +65,3 @@ def run_finance_report_job(job_id: int, user_id: int) -> dict:
         return {"error": str(exc)}
     finally:
         db.close()
-
-
-@celery_app.task(name="finance.process_report", bind=True, max_retries=2)
-def process_finance_report_task(self, job_id: int, user_id: int) -> dict:
-    return run_finance_report_job(job_id, user_id)

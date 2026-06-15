@@ -1,37 +1,38 @@
-"""OCR provider registry and factory."""
+"""OCR provider registry — LLM vision is the default."""
 from typing import Dict, Type
 
 from app.config import settings
 from app.intelligence.receipt.providers.base import BaseOCRProvider, OCRProviderKind
-from app.intelligence.receipt.providers.google_vision import GoogleVisionOCRProvider
-from app.intelligence.receipt.providers.paddleocr import PaddleOCRProvider
-from app.intelligence.receipt.providers.textract import TextractOCRProvider
 from app.intelligence.receipt.providers.vision import GPT4VisionOCRProvider
 
 _PROVIDERS: Dict[OCRProviderKind, Type[BaseOCRProvider]] = {
-    OCRProviderKind.PADDLEOCR: PaddleOCRProvider,
-    OCRProviderKind.TESSERACT: PaddleOCRProvider,
     OCRProviderKind.GPT4O_VISION: GPT4VisionOCRProvider,
-    OCRProviderKind.TEXTRACT: TextractOCRProvider,
-    OCRProviderKind.GOOGLE_VISION: GoogleVisionOCRProvider,
+    OCRProviderKind.PADDLEOCR: GPT4VisionOCRProvider,
+    OCRProviderKind.TESSERACT: GPT4VisionOCRProvider,
+    OCRProviderKind.TEXTRACT: GPT4VisionOCRProvider,
+    OCRProviderKind.GOOGLE_VISION: GPT4VisionOCRProvider,
 }
 
 _ALIASES = {
-    "paddle": OCRProviderKind.PADDLEOCR,
-    "paddle_ocr": OCRProviderKind.PADDLEOCR,
+    "paddle": OCRProviderKind.GPT4O_VISION,
+    "paddle_ocr": OCRProviderKind.GPT4O_VISION,
+    "paddleocr": OCRProviderKind.GPT4O_VISION,
+    "tesseract": OCRProviderKind.GPT4O_VISION,
+    "vision": OCRProviderKind.GPT4O_VISION,
+    "llm": OCRProviderKind.GPT4O_VISION,
 }
 
 
 def get_ocr_provider(kind: str | None = None) -> BaseOCRProvider:
     """Resolve provider from settings.ocr_provider or explicit kind."""
-    key = (kind or settings.ocr_provider or "paddleocr").lower().replace("-", "_")
+    key = (kind or settings.ocr_provider or "gpt4o_vision").lower().replace("-", "_")
     enum_key = _ALIASES.get(key)
     if enum_key is None:
         try:
             enum_key = OCRProviderKind(key)
         except ValueError:
-            enum_key = OCRProviderKind.PADDLEOCR
-    cls = _PROVIDERS.get(enum_key, PaddleOCRProvider)
+            enum_key = OCRProviderKind.GPT4O_VISION
+    cls = _PROVIDERS.get(enum_key, GPT4VisionOCRProvider)
     return cls()
 
 

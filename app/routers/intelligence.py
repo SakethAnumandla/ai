@@ -175,7 +175,7 @@ async def receipt_scan_async(
     db: Session = Depends(get_db),
 ):
     """
-    Image/PDF upload → OCR → entity extraction → fraud checks → autofill → draft (async).
+    Image/PDF upload → LLM vision scan → entity extraction → fraud checks → autofill → draft (async).
     Poll GET /intelligence/jobs/{id} for ReceiptPipelineResult.
     """
     ext = (file.filename or "receipt.jpg").rsplit(".", 1)[-1].lower()
@@ -219,7 +219,6 @@ async def receipt_scan_sync(
     """Synchronous receipt scan for local dev (blocks until complete)."""
     from app.intelligence.receipt.pipeline import ReceiptIntelligencePipeline
     from app.ai.memory.repository import AIRepository
-    from app.ai.memory.redis_store import RedisMemoryStore
     from app.ai.memory.resilient_store import ResilientMemoryStore
     from app.ai.services.memory_service import MemoryService
     from app.ai.services.openai_service import OpenAIService
@@ -252,10 +251,8 @@ async def receipt_scan_sync(
         ) from exc
 
     try:
-        redis = RedisMemoryStore()
-        await redis.connect()
         repo = AIRepository(db)
-        store = ResilientMemoryStore(redis, repo)
+        store = ResilientMemoryStore(repo)
         await store.connect()
         memory = MemoryService(repo, store, OpenAIService(), AuditService(repo))
         tu = TenantUserContext(tenant_id=resolve_tenant_id(user), user_id=user.id)

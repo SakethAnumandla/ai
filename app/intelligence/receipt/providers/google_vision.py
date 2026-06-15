@@ -1,21 +1,6 @@
-"""Google Cloud Vision OCR provider (future — stub falls back to PaddleOCR)."""
-import logging
-from typing import Any, Dict, Optional
-
-from app.intelligence.receipt.providers.base import BaseOCRProvider, OCRProviderKind
-from app.intelligence.receipt.providers.paddleocr import PaddleOCRProvider
-
-logger = logging.getLogger(__name__)
+"""Google Cloud Vision provider — delegates to LLM vision until configured."""
+from app.intelligence.receipt.providers.vision import GPT4VisionOCRProvider
 
 
-class GoogleVisionOCRProvider(BaseOCRProvider):
-    kind = OCRProviderKind.GOOGLE_VISION
-
-    def __init__(self, fallback: Optional[BaseOCRProvider] = None):
-        self._fallback = fallback or PaddleOCRProvider()
-
-    def extract(self, file_data: bytes, file_name: str, extension: str) -> Dict[str, Any]:
-        logger.info("google_vision.not_implemented using paddleocr fallback")
-        result = self._fallback.extract(file_data, file_name, extension)
-        result["ocr_provider"] = f"{self.name}_fallback_paddleocr"
-        return result
+class GoogleVisionOCRProvider(GPT4VisionOCRProvider):
+    kind = GPT4VisionOCRProvider.kind

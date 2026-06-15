@@ -1,14 +1,8 @@
-"""Legacy Tesseract provider name — delegates to PaddleOCR (same OCRProcessor backend)."""
-from app.intelligence.receipt.providers.base import OCRProviderKind
-from app.intelligence.receipt.providers.paddleocr import PaddleOCRProvider
+"""Legacy Tesseract provider name — delegates to LLM vision."""
+from app.intelligence.receipt.providers.vision import GPT4VisionOCRProvider
 
 
-class TesseractOCRProvider(PaddleOCRProvider):
-    """Deprecated: use PaddleOCRProvider. Kept for backward-compatible imports."""
+class TesseractOCRProvider(GPT4VisionOCRProvider):
+    """Deprecated alias — vision scanning is used."""
 
-    kind = OCRProviderKind.TESSERACT
-
-    def extract(self, file_data, file_name, extension):
-        result = super().extract(file_data, file_name, extension)
-        result["ocr_provider"] = self.name
-        return result
+    kind = GPT4VisionOCRProvider.kind

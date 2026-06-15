@@ -18,7 +18,10 @@ from app.ai.dependencies import (
 )
 from app.ai.dead_letter.service import DeadLetterQueueService
 from app.ai.orchestrator.base import AIOrchestrator
-from app.ai.receipt_chat import is_receipt_file, run_chat_receipt_scans
+from app.ai.receipt_chat import (
+    merge_multimodal_with_draft_context,
+    run_chat_receipt_scans,
+)
 from app.ai.schemas.chat import ChatRequest, ChatResponse
 from app.ai.schemas.chat_ui import ChatUIAction, ExpensePreviewCard
 from app.ai.schemas.conversation import ConversationMessageOut
@@ -115,10 +118,10 @@ async def ai_chat_with_attachments(
     memory: MemoryService = Depends(get_ai_memory_service),
 ):
     """
-    Chat with optional images and/or PDFs (multipart), similar to ChatGPT attachments.
+    Chat with images and/or PDFs (multipart), similar to ChatGPT attachments.
 
-    Receipt images/PDFs (JPEG/PNG/WebP/PDF) are analyzed with OCR, saved as draft expenses,
-    and summarized for the copilot. Other file types (e.g. GIF) use vision/PDF text extraction.
+    Files are sent to the vision LLM for reading; structured fields are extracted
+    via LLM vision scanning and saved as draft expenses when possible.
     """
     form = await request.form()
     session_id = str(form.get("session_id") or "").strip()
@@ -137,12 +140,21 @@ async def ai_chat_with_attachments(
 
     ctx = build_session_context(user, session_id)
     file_infos = await process_multiple_files(uploads)
-    receipt_infos = [fi for fi in file_infos if is_receipt_file(fi)]
-    non_receipt_infos = [fi for fi in file_infos if not is_receipt_file(fi)]
+    if not file_infos:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No readable files were uploaded",
+        )
 
-    intent_message = (message or "").strip()
-    persist_message = ""
-    llm_user_content: Optional[object] = None
+    bundle = build_chat_attachment_bundle_from_file_infos(
+        message=message,
+        file_infos=file_infos,
+        max_bytes_per_file=settings.max_upload_size,
+    )
+
+    intent_message = bundle.intent_message
+    persist_message = bundle.persist_message
+    llm_user_content: Optional[object] = bundle.llm_user_content
     scan_tool_results: Optional[list] = None
     expense_previews: Optional[List[ExpensePreviewCard]] = None
     preview_hint = ""
@@ -153,86 +165,61 @@ async def ai_chat_with_attachments(
         and workflow_state.slots.get("creation_mode") == "manual"
     )
 
-    if receipt_infos:
-        scan = await run_blocking(
-            run_chat_receipt_scans,
-            db,
-            user,
-            receipt_infos,
-            user_message=message,
-        )
-        for draft in scan.draft_contexts:
-            await memory.set_draft_expense(ctx, draft)
-        expense_previews = scan.expense_previews or None
-        preview_hint = scan.assistant_hint
+    scan = await run_blocking(
+        run_chat_receipt_scans,
+        db,
+        user,
+        file_infos,
+        user_message=message,
+    )
+    for draft in scan.draft_contexts:
+        await memory.set_draft_expense(ctx, draft)
+    expense_previews = scan.expense_previews or None
+    preview_hint = scan.assistant_hint
+    if scan.results:
         intent_message = scan.intent_message
         persist_message = scan.persist_message
-        llm_user_content = scan.llm_user_content
+        llm_user_content = merge_multimodal_with_draft_context(
+            bundle.llm_user_content,
+            str(scan.llm_user_content),
+        )
         scan_tool_results = [
             {
-                "tool": "receipt_ocr_scan",
+                "tool": "receipt_vision_scan",
                 "success": True,
                 "data": r.model_dump(mode="json"),
             }
             for r in scan.results
         ]
-        if scan.errors and not scan.results:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail="; ".join(scan.errors),
-            )
-
-        if merge_into_workflow and scan.results:
-            prefill = scan.results[-1].prefill or {}
-            expense_id = scan.results[-1].expense_id
-            merged = merge_ocr_prefill_into_state(
-                workflow_state,
-                prefill,
-                expense_id=expense_id,
-            )
-            await memory.set_workflow_state(ctx, merged)
-            if scan.draft_contexts:
-                await memory.set_draft_expense(ctx, scan.draft_contexts[-1])
-            preview_hint = (
-                "I've scanned your receipt and updated the expense details. "
-                "Review the preview below, then tap **Edit** or **Submit for approval**."
-            )
-            intent_message = "Receipt uploaded — show updated expense summary."
-        elif scan.results:
-            # Exit OCR "attach a receipt" wait — draft + preview cards carry state forward.
-            await memory.clear_workflow_state(ctx)
-            await memory.clear_pending_intent(ctx)
-
-    if non_receipt_infos:
-        bundle = build_chat_attachment_bundle_from_file_infos(
-            message=intent_message or message,
-            file_infos=non_receipt_infos,
-            max_bytes_per_file=settings.max_upload_size,
-        )
-        if receipt_infos:
-            persist_message = f"{persist_message}\n{bundle.persist_message}".strip()
-            ocr_text = str(llm_user_content)
-            extra = (
-                bundle.llm_user_content
-                if isinstance(bundle.llm_user_content, list)
-                else [{"type": "text", "text": str(bundle.llm_user_content)}]
-            )
-            llm_user_content = [{"type": "text", "text": ocr_text}, *extra[1:]]
-        else:
-            intent_message = bundle.intent_message
-            persist_message = bundle.persist_message
-            llm_user_content = bundle.llm_user_content
-
-    if not receipt_infos and not non_receipt_infos:
+    elif scan.errors:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="No readable files were uploaded",
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="; ".join(scan.errors),
         )
+
+    if merge_into_workflow and scan.results:
+        prefill = scan.results[-1].prefill or {}
+        expense_id = scan.results[-1].expense_id
+        merged = merge_ocr_prefill_into_state(
+            workflow_state,
+            prefill,
+            expense_id=expense_id,
+        )
+        await memory.set_workflow_state(ctx, merged)
+        if scan.draft_contexts:
+            await memory.set_draft_expense(ctx, scan.draft_contexts[-1])
+        preview_hint = (
+            "I've read your receipt and updated the expense details. "
+            "Review the preview below, then tap **Edit** or **Submit for approval**."
+        )
+        intent_message = "Receipt uploaded — show updated expense summary."
+    elif scan.results:
+        await memory.clear_workflow_state(ctx)
+        await memory.clear_pending_intent(ctx)
 
     if len(persist_message) > 32000:
         persist_message = persist_message[:31900] + "\n…[truncated]"
 
-    # OCR path skips slot machine unless merging into an active manual workflow.
     skip_workflow = bool(scan_tool_results) and not merge_into_workflow
 
     result = await orchestrator.handle_user_message(
@@ -276,7 +263,7 @@ async def ai_chat_end(
     user: User = Depends(get_current_user),
     orchestrator: AIOrchestrator = Depends(get_ai_orchestrator),
 ):
-    """End a chat session — clears workflow/draft/redis cache for this session_id."""
+    """End a chat session — clears workflow/draft session memory for this session_id."""
     ctx = build_session_context(user, session_id)
     await orchestrator.end_session(ctx, user=user)
 

@@ -1,9 +1,9 @@
-"""Run receipt OCR + draft save when users attach bills in AI chat."""
+"""Run LLM vision receipt scan + draft save when users attach bills in AI chat."""
 from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 from sqlalchemy.orm import Session
 
@@ -16,7 +16,9 @@ from app.models import User
 
 logger = logging.getLogger(__name__)
 
-RECEIPT_EXTENSIONS = frozenset({"jpg", "jpeg", "png", "pdf", "webp"})
+RECEIPT_EXTENSIONS = frozenset({"jpg", "jpeg", "png", "pdf", "webp", "gif"})
+
+LlmUserContent = Union[str, List[Dict[str, Any]]]
 
 
 def is_receipt_file(file_info: dict) -> bool:
@@ -29,7 +31,7 @@ def is_receipt_file(file_info: dict) -> bool:
 
 @dataclass
 class ChatReceiptScanOutcome:
-    """OCR results and messages for POST /ai/chat/upload."""
+    """Vision scan results and messages for POST /ai/chat/upload."""
 
     results: List[ReceiptPipelineResult] = field(default_factory=list)
     errors: List[str] = field(default_factory=list)
@@ -37,17 +39,17 @@ class ChatReceiptScanOutcome:
     expense_previews: List[ExpensePreviewCard] = field(default_factory=list)
     intent_message: str = ""
     persist_message: str = ""
-    llm_user_content: str = ""
+    llm_user_content: LlmUserContent = ""
     assistant_hint: str = ""
 
 
 def _format_one_result(index: int, result: ReceiptPipelineResult) -> List[str]:
     af = result.autofill
-    lines = [f"### Receipt {index}"]
+    lines = [f"### Document {index}"]
     if result.expense_id:
         lines.append(f"- Draft expense ID: {result.expense_id}")
     if result.ocr_bill_id:
-        lines.append(f"- OCR bill record ID: {result.ocr_bill_id}")
+        lines.append(f"- Bill record ID: {result.ocr_bill_id}")
     name = af.vendor_name or af.bill_name
     if name:
         lines.append(f"- Merchant / bill name: {name}")
@@ -57,7 +59,7 @@ def _format_one_result(index: int, result: ReceiptPipelineResult) -> List[str]:
         lines.append(f"- Category: {af.main_category}")
     if af.payment_method:
         lines.append(f"- Payment: {af.payment_method}")
-    lines.append(f"- OCR confidence: {result.overall_confidence:.0%}")
+    lines.append(f"- Scan confidence: {result.overall_confidence:.0%}")
     if result.is_duplicate:
         lines.append("- Duplicate warning: similar bill may already exist for this user")
     if result.requires_human_review:
@@ -77,12 +79,12 @@ def _format_one_result(index: int, result: ReceiptPipelineResult) -> List[str]:
     return lines
 
 
-def build_chat_messages(
+def build_draft_context_message(
     results: List[ReceiptPipelineResult],
     errors: List[str],
     user_message: str,
-) -> tuple[str, str, str]:
-    """Return (intent_message, persist_message, llm_user_content)."""
+) -> str:
+    """Text context about saved drafts — paired with multimodal image content for the LLM."""
     cleaned = (user_message or "").strip()
     blocks: List[str] = []
 
@@ -90,15 +92,16 @@ def build_chat_messages(
         blocks.append(f"User message: {cleaned}")
 
     blocks.append(
-        "The user attached receipt image(s) or PDF(s) in chat. "
-        "OCR has been run and each bill was saved as a DRAFT expense in the database. "
+        "The user attached receipt image(s) or PDF(s). "
+        "Each document was read with LLM vision scanning and saved as a DRAFT expense. "
+        "Use the attached images plus the structured scan summary below. "
         "Summarize what was extracted, mention expense IDs, and guide next steps "
-        "(confirm details, submit for approval, or fix unclear fields). Do not claim "
-        "the expense was submitted unless the user confirms."
+        "(confirm details, submit for approval, or fix unclear fields). "
+        "Do not claim the expense was submitted unless the user confirms."
     )
 
     if results:
-        blocks.append("\n## OCR scan results")
+        blocks.append("\n## Vision scan results")
         for i, r in enumerate(results, start=1):
             blocks.extend(_format_one_result(i, r))
 
@@ -106,16 +109,44 @@ def build_chat_messages(
         blocks.append("\n## Scan errors")
         blocks.extend(f"- {e}" for e in errors)
 
-    body = "\n".join(blocks)
+    return "\n".join(blocks)
+
+
+def merge_multimodal_with_draft_context(
+    multimodal: LlmUserContent,
+    draft_context: str,
+) -> LlmUserContent:
+    """Prepend draft summary to vision multimodal user content."""
+    if isinstance(multimodal, str):
+        return f"{draft_context}\n\n{multimodal}"
+    parts = list(multimodal)
+    if parts and parts[0].get("type") == "text":
+        parts[0] = {
+            "type": "text",
+            "text": f"{draft_context}\n\n{parts[0].get('text', '')}",
+        }
+    else:
+        parts.insert(0, {"type": "text", "text": draft_context})
+    return parts
+
+
+def build_chat_messages(
+    results: List[ReceiptPipelineResult],
+    errors: List[str],
+    user_message: str,
+) -> tuple[str, str, str]:
+    """Return (intent_message, persist_message, draft_context_text)."""
+    cleaned = (user_message or "").strip()
+    body = build_draft_context_message(results, errors, user_message)
     attach_names = " ".join(
         f"[Receipt scanned: expense #{r.expense_id}]" for r in results if r.expense_id
     )
     persist = f"{cleaned}\n{attach_names}".strip() if cleaned else attach_names.strip()
     if not persist:
-        persist = "[Receipt attachment — OCR draft saved]"
+        persist = "[Receipt attachment — draft saved]"
 
     intent = cleaned or (
-        "I attached a receipt. Please review the OCR results and help me with this expense."
+        "I attached a receipt. Please read it and help me with this expense."
     )
     return intent, persist, body
 
@@ -146,12 +177,12 @@ def run_chat_receipt_scans(
             logger.exception("chat.receipt_scan_failed file=%s", name)
             outcome.errors.append(f"{name}: {exc}")
 
-    intent, persist, llm = build_chat_messages(
+    intent, persist, draft_ctx = build_chat_messages(
         outcome.results, outcome.errors, user_message
     )
     outcome.expense_previews = build_expense_preview_cards(db, outcome.results)
     outcome.assistant_hint = format_preview_message(outcome.expense_previews)
     outcome.intent_message = intent
     outcome.persist_message = persist
-    outcome.llm_user_content = llm
+    outcome.llm_user_content = draft_ctx
     return outcome

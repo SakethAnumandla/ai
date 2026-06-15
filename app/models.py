@@ -788,7 +788,7 @@ class OCRBill(Base):
 
 
 class ProcessingJob(Base):
-    """Async voice / receipt intelligence jobs (Celery-backed, pollable)."""
+    """Async voice / receipt intelligence jobs (background thread, pollable)."""
 
     __tablename__ = "processing_jobs"
 

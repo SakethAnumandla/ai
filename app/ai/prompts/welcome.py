@@ -3,7 +3,7 @@
 CHAT_WELCOME_MESSAGE = (
     "Hey! 👋 I'm Bizwy AI — your expense assistant.\n\n"
     "To **create an expense**, you can:\n"
-    "• **Upload** a receipt (image or PDF) using 📎 — I'll scan it with OCR\n"
+    "• **Upload** a receipt (image or PDF) using 📎 — I'll read it with AI vision\n"
     "• **Enter manually** — say *\"create expense manually\"* and I'll ask each field\n"
     "• **Mix both** — start manually and attach a bill anytime to auto-fill\n\n"
     "You can log **multiple bills** in one chat (e.g. travel and meals). "

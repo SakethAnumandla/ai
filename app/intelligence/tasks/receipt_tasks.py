@@ -1,11 +1,10 @@
-"""Celery tasks for receipt OCR intelligence."""
+"""Background jobs for receipt OCR intelligence."""
 import asyncio
 import base64
 import logging
 
 from app.database import SessionLocal
 from app.ai.memory.repository import AIRepository
-from app.ai.memory.redis_store import RedisMemoryStore
 from app.ai.memory.resilient_store import ResilientMemoryStore
 from app.ai.schemas.common import SessionContext, TenantUserContext
 from app.ai.security import resolve_tenant_id
@@ -15,20 +14,14 @@ from app.ai.services.openai_service import OpenAIService
 from app.intelligence.jobs.service import JobService
 from app.intelligence.receipt.pipeline import ReceiptIntelligencePipeline
 from app.intelligence.schemas import JobStatus
-from app.intelligence.tasks.celery_app import celery_app
 from app.models import User
 
 logger = logging.getLogger(__name__)
 
 
 async def _persist_draft_memory(db, user: User, pipeline: ReceiptIntelligencePipeline, result) -> None:
-    redis = RedisMemoryStore()
-    try:
-        await redis.connect()
-    except Exception:
-        pass
     repo = AIRepository(db)
-    store = ResilientMemoryStore(redis, repo)
+    store = ResilientMemoryStore(repo)
     await store.connect()
     memory = MemoryService(repo, store, OpenAIService(), AuditService(repo))
     tu = TenantUserContext(tenant_id=resolve_tenant_id(user), user_id=user.id)
@@ -94,8 +87,3 @@ def run_receipt_ocr_job(job_id: int, user_id: int) -> dict:
         raise
     finally:
         db.close()
-
-
-@celery_app.task(name="intelligence.process_receipt_ocr", bind=True, max_retries=2)
-def process_receipt_ocr_task(self, job_id: int, user_id: int):
-    return run_receipt_ocr_job(job_id, user_id)

@@ -33,7 +33,20 @@ def build_expense_preview_card(
     if not expense:
         return None
 
-    resp = build_expense_response(expense)
+    preview_url = None
+    thumbnail_url = None
+    can_preview = False
+    try:
+        resp = build_expense_response(expense)
+        preview_url = resp.preview_url
+        thumbnail_url = resp.thumbnail_url
+        can_preview = bool(resp.can_preview)
+    except Exception:
+        primary = expense.files[0] if expense.files else None
+        if primary:
+            preview_url = primary.preview_url or primary.file_url
+            can_preview = bool(primary.can_preview)
+
     prefill = dict(result.prefill or {})
     af = result.autofill
     if af.bill_name:
@@ -64,9 +77,9 @@ def build_expense_preview_card(
         ),
         bill_date=expense.bill_date.isoformat() if expense.bill_date else None,
         status=status,
-        preview_url=resp.preview_url,
-        thumbnail_url=resp.thumbnail_url,
-        can_preview=bool(resp.can_preview),
+        preview_url=preview_url,
+        thumbnail_url=thumbnail_url,
+        can_preview=can_preview,
         overall_confidence=result.overall_confidence,
         fields=fields,
         fields_needing_clarification=clarify,
@@ -90,13 +103,13 @@ def build_expense_preview_cards(
 def format_preview_message(cards: List[ExpensePreviewCard]) -> str:
     if not cards:
         return (
-            "I scanned your receipt(s). Review the details below and tap **Submit** "
+            "I read your receipt(s). Review the details below and tap **Submit** "
             "when ready, or **Edit** to change any field."
         )
     if len(cards) == 1:
         c = cards[0]
         vendor = c.vendor_name or c.bill_name or "this bill"
-        amount = f"₹{c.bill_amount:,.2f}" if c.bill_amount else "the scanned amount"
+        amount = f"₹{c.bill_amount:,.2f}" if c.bill_amount else "the amount shown"
         return (
             f"I've extracted details from **{vendor}** ({amount}). "
             "Preview your receipt below, review the fields, then **Submit** or **Edit**."
@@ -105,7 +118,7 @@ def format_preview_message(cards: List[ExpensePreviewCard]) -> str:
         (c.vendor_name or c.bill_name or f"Bill #{c.expense_id}") for c in cards
     )
     return (
-        f"I scanned **{len(cards)} bills** ({labels}). "
+        f"I read **{len(cards)} bills** ({labels}). "
         "Each preview is shown below — review, edit if needed, then submit them one by one "
         "or say **submit all**."
     )

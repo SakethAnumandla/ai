@@ -1,4 +1,4 @@
-"""Processing job lifecycle — create, poll, Celery dispatch with thread fallback."""
+"""Processing job lifecycle — create, poll, background thread dispatch."""
 import logging
 import threading
 from datetime import datetime, timezone
@@ -6,7 +6,7 @@ from typing import Any, Callable, Dict, Optional
 
 from sqlalchemy.orm import Session
 
-from app.intelligence.schemas import JobStatus, JobType, ProcessingJobOut
+from app.intelligence.schemas import JobStatus, ProcessingJobOut
 from app.models import ProcessingJob, ProcessingJobStatus
 
 logger = logging.getLogger(__name__)
@@ -63,7 +63,6 @@ class JobService:
         progress: Optional[str] = None,
         result: Optional[Dict[str, Any]] = None,
         error_message: Optional[str] = None,
-        celery_task_id: Optional[str] = None,
     ) -> Optional[ProcessingJob]:
         row = self._db.query(ProcessingJob).filter(ProcessingJob.id == job_id).first()
         if not row:
@@ -75,8 +74,6 @@ class JobService:
             row.result = result
         if error_message is not None:
             row.error_message = error_message
-        if celery_task_id:
-            row.celery_task_id = celery_task_id
         if status in (JobStatus.COMPLETED.value, JobStatus.FAILED.value):
             row.completed_at = datetime.now(timezone.utc)
         row.updated_at = datetime.now(timezone.utc)
@@ -97,69 +94,25 @@ class JobService:
         )
 
     def dispatch_receipt_ocr(self, job_id: int, user_id: int) -> None:
-        try:
-            from app.intelligence.tasks.receipt_tasks import process_receipt_ocr_task
+        from app.intelligence.tasks.receipt_tasks import run_receipt_ocr_job
 
-            async_result = process_receipt_ocr_task.delay(job_id, user_id)
-            self.update_status(
-                job_id,
-                JobStatus.PENDING.value,
-                progress="queued",
-                celery_task_id=async_result.id,
-            )
-        except Exception as exc:
-            logger.warning("Celery dispatch failed, running in background: %s", exc)
-            from app.intelligence.tasks.receipt_tasks import run_receipt_ocr_job
-
-            _dispatch_in_background("receipt-ocr", run_receipt_ocr_job, job_id, user_id)
+        self.update_status(job_id, JobStatus.PENDING.value, progress="queued")
+        _dispatch_in_background("receipt-ocr", run_receipt_ocr_job, job_id, user_id)
 
     def dispatch_voice_transcribe(self, job_id: int, user_id: int) -> None:
-        try:
-            from app.intelligence.tasks.voice_tasks import process_voice_transcribe_task
+        from app.intelligence.tasks.voice_tasks import run_voice_transcribe_job
 
-            async_result = process_voice_transcribe_task.delay(job_id, user_id)
-            self.update_status(
-                job_id,
-                JobStatus.PENDING.value,
-                progress="queued",
-                celery_task_id=async_result.id,
-            )
-        except Exception as exc:
-            logger.warning("Celery dispatch failed, running in background: %s", exc)
-            from app.intelligence.tasks.voice_tasks import run_voice_transcribe_job
-
-            _dispatch_in_background("voice-transcribe", run_voice_transcribe_job, job_id, user_id)
+        self.update_status(job_id, JobStatus.PENDING.value, progress="queued")
+        _dispatch_in_background("voice-transcribe", run_voice_transcribe_job, job_id, user_id)
 
     def dispatch_voice_chat(self, job_id: int, user_id: int) -> None:
-        try:
-            from app.intelligence.tasks.voice_tasks import process_voice_chat_task
+        from app.intelligence.tasks.voice_tasks import run_voice_chat_job
 
-            async_result = process_voice_chat_task.delay(job_id, user_id)
-            self.update_status(
-                job_id,
-                JobStatus.PENDING.value,
-                progress="queued",
-                celery_task_id=async_result.id,
-            )
-        except Exception as exc:
-            logger.warning("Celery dispatch failed, running in background: %s", exc)
-            from app.intelligence.tasks.voice_tasks import run_voice_chat_job
-
-            _dispatch_in_background("voice-chat", run_voice_chat_job, job_id, user_id)
+        self.update_status(job_id, JobStatus.PENDING.value, progress="queued")
+        _dispatch_in_background("voice-chat", run_voice_chat_job, job_id, user_id)
 
     def dispatch_finance_report(self, job_id: int, user_id: int) -> None:
-        try:
-            from app.finance.tasks.report_tasks import process_finance_report_task
+        from app.finance.tasks.report_tasks import run_finance_report_job
 
-            async_result = process_finance_report_task.delay(job_id, user_id)
-            self.update_status(
-                job_id,
-                JobStatus.PENDING.value,
-                progress="queued",
-                celery_task_id=async_result.id,
-            )
-        except Exception as exc:
-            logger.warning("Celery dispatch failed, running in background: %s", exc)
-            from app.finance.tasks.report_tasks import run_finance_report_job
-
-            _dispatch_in_background("finance-report", run_finance_report_job, job_id, user_id)
+        self.update_status(job_id, JobStatus.PENDING.value, progress="queued")
+        _dispatch_in_background("finance-report", run_finance_report_job, job_id, user_id)

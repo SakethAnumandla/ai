@@ -1,4 +1,4 @@
-"""Create draft expenses from OCR (one bill per file, minimal prefill)."""
+"""Create draft expenses from LLM vision scanning (one bill per file)."""
 import os
 import re
 import tempfile
@@ -17,7 +17,7 @@ from app.models import (
     TransactionType,
     UploadMethod,
 )
-from app.services.ocr_service import OCRProcessor
+from app.ai.vision_receipt import get_vision_extractor
 from app.services.tax_service import TaxService
 from app.utils.dedup import find_expense_by_file_hash
 from app.utils.ocr_quality import OcrScanUnreadable
@@ -32,7 +32,7 @@ from app.utils.ocr_categories import (
     resolve_classification,
 )
 
-ocr_processor = OCRProcessor()
+ocr_processor = get_vision_extractor()
 
 
 def coerce_bill_prefill(prefill: dict) -> dict:
@@ -453,7 +453,7 @@ def create_ocr_draft(
     force_rescan: bool = False,
 ) -> Tuple[Optional[Expense], dict, bool, Optional[str]]:
     """
-    Run OCR, store full data on OCRBill, create DRAFT expense with main fields only.
+    Run LLM vision scan, store data on OCRBill, create DRAFT expense with main fields.
     Returns (expense, prefill_dict, is_duplicate, error_message).
     """
     file_hash = file_info.get("file_hash")
@@ -478,13 +478,12 @@ def create_ocr_draft(
                 )
 
     ext = file_info.get("file_extension") or file_info["file_name"].rsplit(".", 1)[-1].lower()
-    tmp_path = None
     try:
-        with tempfile.NamedTemporaryFile(delete=False, suffix=f".{ext}") as tmp:
-            tmp.write(file_info["file_data"])
-            tmp_path = tmp.name
-
-        extracted = ocr_processor.extract_bill_data_sync(tmp_path, ext)
+        extracted = ocr_processor.extract_sync(
+            file_info["file_data"],
+            file_info["file_name"],
+            ext,
+        )
         from app.utils.ocr_quality import ensure_ocr_readable
 
         ensure_ocr_readable(extracted)
@@ -492,9 +491,6 @@ def create_ocr_draft(
         raise
     except Exception as e:
         return None, {}, False, str(e)
-    finally:
-        if tmp_path and os.path.exists(tmp_path):
-            os.remove(tmp_path)
 
     try:
         return _create_ocr_draft_from_extracted(
@@ -532,6 +528,9 @@ def _create_ocr_draft_from_extracted(
         sub_category,
         transaction_type,
     )
+    if float(prefill.get("bill_amount") or 0) <= 0:
+        prefill["bill_amount"] = 1.0
+        prefill["amount_needs_review"] = True
 
     ocr_bill = _persist_ocr_bill(
         db, user_id, file_info, extracted, batch_id, main_category, sub_category

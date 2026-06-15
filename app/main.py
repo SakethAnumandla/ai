@@ -14,25 +14,12 @@ from app.dependencies import get_current_user
 from app.models import User
 from app.routers import expenses, ocr, wallet, dashboard, policies, claims, approvals, categories, tax, ai, ai_memory, intelligence, manager, finance, executive, filters, expense_workflow
 from app.schemas import get_all_categories, get_category_hierarchy, get_policy_types
-from app.ai.dependencies import shutdown_ai_redis
+from app.ai.dependencies import shutdown_ai_services
 from app.ai import models as _ai_models  # noqa: F401 — register AI tables with Base
 from app.models import AIChatSession  # noqa: F401 — register chat session table
 from app.middleware.no_buffer import NoBufferMiddleware
 
 logger = logging.getLogger(__name__)
-
-
-def _warm_paddle_ocr() -> None:
-    """Load PaddleOCR once at startup so first bill scan is not ~60–120s (502 via proxy)."""
-    if not settings.paddle_ocr_preload:
-        return
-    try:
-        from app.services.paddle_ocr_engine import _get_engine
-
-        _get_engine()
-        logger.info("paddle_ocr.preload_ok")
-    except Exception as exc:
-        logger.warning("paddle_ocr.preload_failed: %s", exc)
 
 
 def _init_database_schema() -> None:
@@ -63,7 +50,6 @@ async def lifespan(app: FastAPI):
         await loop.run_in_executor(None, _migrate_submitted_by)
     except Exception as exc:
         logger.warning("business_fields_migration: %s", exc)
-    await loop.run_in_executor(None, _warm_paddle_ocr)
     if (settings.openai_api_key or "").strip():
         logger.info(
             "openai.ready model=%s conversational=%s welcome=%s",
@@ -76,13 +62,13 @@ async def lifespan(app: FastAPI):
             "openai.not_configured — set OPENAI_API_KEY in .env for interactive copilot chat"
         )
     yield
-    await shutdown_ai_redis()
+    await shutdown_ai_services()
     dispose_engine()
 
 
 app = FastAPI(
     title="Expense Tracker API",
-    description="Track expenses with manual entry and OCR scanning",
+    description="Track expenses with manual entry and LLM vision receipt scanning",
     version="1.0.0",
     lifespan=lifespan,
 )
@@ -134,6 +120,7 @@ async def health_check():
         "openai": {
             "configured": openai_configured,
             "primary_model": settings.openai_primary_model,
+            "vision_model": settings.openai_vision_model,
             "conversational": settings.openai_conversational_enabled and openai_configured,
             "dynamic_welcome": settings.openai_dynamic_welcome and openai_configured,
         },

@@ -1,5 +1,4 @@
 import logging
-import os
 
 from sqlalchemy import create_engine
 from sqlalchemy.ext.declarative import declarative_base
@@ -14,7 +13,7 @@ _connect_args = {}
 if "sslmode=require" in settings.database_url or "aivencloud.com" in settings.database_url:
     _connect_args["sslmode"] = "require"
 
-_use_null_pool = settings.db_use_null_pool or os.getenv("CELERY_WORKER", "").strip() == "1"
+_use_null_pool = settings.db_use_null_pool
 
 if _use_null_pool:
     engine = create_engine(
@@ -22,10 +21,7 @@ if _use_null_pool:
         poolclass=NullPool,
         connect_args=_connect_args,
     )
-    logger.info(
-        "database.engine pool=null (celery=%s)",
-        os.getenv("CELERY_WORKER", ""),
-    )
+    logger.info("database.engine pool=null")
 else:
     engine = create_engine(
         settings.database_url,

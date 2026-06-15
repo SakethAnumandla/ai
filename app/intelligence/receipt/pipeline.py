@@ -1,4 +1,4 @@
-"""Receipt intelligence pipeline — OCR → entities → fraud → autofill → human review."""
+"""Receipt intelligence pipeline — vision scan → entities → fraud → autofill → human review."""
 from sqlalchemy.orm import Session, joinedload
 
 from app.ai.schemas.common import TenantUserContext
@@ -13,7 +13,6 @@ from app.intelligence.receipt.human_review import HumanReviewService
 from app.intelligence.receipt.json_storage import field_confidence_to_json, merge_extracted_fields
 from app.intelligence.receipt.providers import get_default_ocr_provider
 from app.intelligence.receipt.providers.base import BaseOCRProvider
-from app.intelligence.receipt.pdf_aggregator import PdfReceiptAggregator
 from app.intelligence.schemas import ReceiptPipelineResult
 from app.models import Expense, User
 from app.services.ocr_draft_service import create_ocr_draft
@@ -64,16 +63,6 @@ class ReceiptIntelligencePipeline:
 
         ext = file_info.get("file_extension") or "jpg"
         ocr_meta: dict = {}
-        if ext.lower() == "pdf":
-            pages = self._ocr.extract_pages(
-                file_info["file_data"],
-                file_info["file_name"],
-                ext,
-            )
-            if len(pages) > 1:
-                legacy_pages = [p.get("_legacy") or p for p in pages]
-                stitched = PdfReceiptAggregator.stitch(legacy_pages)
-                ocr_meta = BaseOCRProvider.normalize(stitched)
 
         from app.services.ocr_draft_service import create_manual_upload_draft
         from app.utils.ocr_quality import OcrScanUnreadable
@@ -149,7 +138,7 @@ class ReceiptIntelligencePipeline:
             ocr_provider=ocr_meta.get("ocr_provider") or getattr(self._ocr, "name", None),
             pdf_page_count=ocr_meta.get("pdf_page_count"),
             ocr_explanations=ocr_explanations,
-            assistant_message="Receipt scanned.",
+            assistant_message="Receipt read and saved as draft.",
         )
 
         result = self._review.evaluate(result, fraud_blocking=blocking)
@@ -165,7 +154,7 @@ class ReceiptIntelligencePipeline:
             if autofill.explanation:
                 msg_parts.append(autofill.explanation)
             result.assistant_message = (
-                " ".join(msg_parts) if msg_parts else "Receipt scanned. Please review the draft."
+                " ".join(msg_parts) if msg_parts else "Receipt read. Please review the draft."
             )
         else:
             result.assistant_message = result.assistant_message or (

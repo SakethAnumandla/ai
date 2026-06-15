@@ -1,4 +1,4 @@
-"""Build AI orchestrator inside Celery workers (outside FastAPI request scope)."""
+"""Build AI orchestrator outside FastAPI request scope (background jobs)."""
 import asyncio
 
 from sqlalchemy.orm import Session
@@ -6,7 +6,6 @@ from sqlalchemy.orm import Session
 from app.ai.confirmation.service import ConfirmationService
 from app.ai.dead_letter.service import DeadLetterQueueService
 from app.ai.memory.repository import AIRepository
-from app.ai.memory.redis_store import RedisMemoryStore
 from app.ai.memory.resilient_store import ResilientMemoryStore
 from app.ai.orchestrator.base import AIOrchestrator
 from app.ai.services.audit_service import AuditService
@@ -20,15 +19,8 @@ from app.ai.idempotency.service import IdempotencyService
 
 
 def build_orchestrator(db: Session) -> AIOrchestrator:
-    redis = RedisMemoryStore()
-    try:
-        loop = asyncio.new_event_loop()
-        loop.run_until_complete(redis.connect())
-    except Exception:
-        pass
-
     repo = AIRepository(db)
-    store = ResilientMemoryStore(redis, repo)
+    store = ResilientMemoryStore(repo)
     try:
         loop = asyncio.new_event_loop()
         loop.run_until_complete(store.connect())
@@ -38,7 +30,7 @@ def build_orchestrator(db: Session) -> AIOrchestrator:
     openai = OpenAIService()
     audit = AuditService(repo)
     memory = MemoryService(repo, store, openai, audit)
-    locks = SessionLockManager(redis_client=redis._client if redis.is_connected else None)
+    locks = SessionLockManager()
     executor = ToolExecutor(
         circuit_breaker=ToolCircuitBreaker(),
         idempotency=IdempotencyService(db),
