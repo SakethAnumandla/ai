@@ -38,10 +38,10 @@ def _init_database_schema() -> None:
         )
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    _init_database_schema()
+async def _run_startup_init() -> None:
+    """Schema + migrations off the critical path so Uvicorn binds $PORT before Render's scan."""
     loop = asyncio.get_running_loop()
+    await loop.run_in_executor(None, _init_database_schema)
     try:
         from app.migrations.add_expense_business_fields import run as _migrate_business
         from app.migrations.add_expense_submitted_by import run as _migrate_submitted_by
@@ -50,6 +50,11 @@ async def lifespan(app: FastAPI):
         await loop.run_in_executor(None, _migrate_submitted_by)
     except Exception as exc:
         logger.warning("business_fields_migration: %s", exc)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    init_task = asyncio.create_task(_run_startup_init())
     if (settings.openai_api_key or "").strip():
         logger.info(
             "openai.ready model=%s conversational=%s welcome=%s",
@@ -62,6 +67,12 @@ async def lifespan(app: FastAPI):
             "openai.not_configured — set OPENAI_API_KEY in .env for interactive copilot chat"
         )
     yield
+    if not init_task.done():
+        try:
+            await asyncio.wait_for(init_task, timeout=120)
+        except asyncio.TimeoutError:
+            logger.warning("startup_init still running at shutdown")
+            init_task.cancel()
     await shutdown_ai_services()
     dispose_engine()
 

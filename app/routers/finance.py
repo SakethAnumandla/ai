@@ -390,7 +390,7 @@ def enqueue_finance_report(
 def download_finance_report(
     job_id: int,
     request: Request,
-    format: str = Query("csv", regex="^(csv|json)$"),
+    format: str = Query("csv", pattern="^(csv|json)$"),
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):

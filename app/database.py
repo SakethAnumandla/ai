@@ -9,7 +9,7 @@ from app.config import settings
 
 logger = logging.getLogger(__name__)
 
-_connect_args = {}
+_connect_args = {"connect_timeout": 10}
 if "sslmode=require" in settings.database_url or "aivencloud.com" in settings.database_url:
     _connect_args["sslmode"] = "require"
 

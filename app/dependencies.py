@@ -388,7 +388,7 @@ class DateRangeParams:
         self,
         start_date: Optional[datetime] = Query(None, description="Start date"),
         end_date: Optional[datetime] = Query(None, description="End date"),
-        period: Optional[str] = Query("month", regex="^(day|week|month|year|all)$", description="Predefined period")
+        period: Optional[str] = Query("month", pattern="^(day|week|month|year|all)$", description="Predefined period")
     ):
         self.end_date = end_date or datetime.utcnow()
         
