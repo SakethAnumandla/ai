@@ -1,5 +1,5 @@
-# Production: backend only. Set DATABASE_URL in .env (e.g. Aiven Postgres).
-# Optional local Postgres: docker compose --profile local up -d
+# Single database: set DATABASE_URL in .env (Aiven Postgres).
+# Run: docker compose up -d
 
 services:
   backend:
@@ -9,16 +9,10 @@ services:
       - "8000:8000"
     env_file:
       - .env
-      - path: .env.docker.local
-        required: false
     environment:
-      DB_POOL_SIZE: "2"
-      DB_MAX_OVERFLOW: "1"
-      DB_POOL_RECYCLE: "1800"
-    depends_on:
-      postgres:
-        condition: service_healthy
-        required: false
+      DB_USE_NULL_POOL: "true"
+      UVICORN_WORKERS: "1"
+      UVICORN_LIMIT_CONCURRENCY: "40"
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", "import json,urllib.request; r=urllib.request.urlopen('http://127.0.0.1:8000/health'); d=json.load(r); assert d.get('database',{}).get('ok')"]
@@ -26,23 +20,3 @@ services:
       timeout: 5s
       retries: 6
       start_period: 30s
-
-  postgres:
-    profiles: ["local"]
-    image: postgres:15
-    environment:
-      POSTGRES_USER: user
-      POSTGRES_PASSWORD: password
-      POSTGRES_DB: expense_tracker
-    ports:
-      - "5432:5432"
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U user -d expense_tracker"]
-      interval: 3s
-      timeout: 5s
-      retries: 10
-
-volumes:
-  postgres_data:

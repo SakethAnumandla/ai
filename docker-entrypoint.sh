@@ -9,8 +9,9 @@ if [ "$1" = "uvicorn" ]; then
   exec uvicorn "$@" \
     --host 0.0.0.0 \
     --port "$PORT" \
+    --workers "${UVICORN_WORKERS:-1}" \
     --timeout-keep-alive 120 \
-    --limit-concurrency "${UVICORN_LIMIT_CONCURRENCY:-200}"
+    --limit-concurrency "${UVICORN_LIMIT_CONCURRENCY:-40}"
 fi
 
 exec "$@"

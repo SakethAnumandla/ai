@@ -3,15 +3,13 @@ import logging
 from contextlib import asynccontextmanager
 from urllib.parse import urlparse
 
-from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from sqlalchemy.orm import Session
+from sqlalchemy.exc import OperationalError, SQLAlchemyError
 
 from app.config import settings
-from app.database import engine, Base, dispose_engine, check_database, get_db
-from app.dependencies import get_current_user
-from app.models import User
+from app.database import engine, Base, dispose_engine, check_database
 from app.routers import expenses, ocr, wallet, dashboard, policies, claims, approvals, categories, tax, ai, ai_memory, intelligence, manager, finance, executive, filters, expense_workflow
 from app.schemas import get_all_categories, get_category_hierarchy, get_policy_types
 from app.ai.dependencies import shutdown_ai_services
@@ -20,6 +18,16 @@ from app.models import AIChatSession  # noqa: F401 — register chat session tab
 from app.middleware.no_buffer import NoBufferMiddleware
 
 logger = logging.getLogger(__name__)
+
+
+def _db_unavailable_message(exc: BaseException) -> str:
+    msg = str(getattr(exc, "orig", exc))
+    if "connection slots" in msg.lower() or "too many clients" in msg.lower():
+        return (
+            "PostgreSQL connection limit reached. "
+            "Stop pgAdmin/extra apps, restart backend, or use Aiven's connection pooler URL."
+        )
+    return msg[:500]
 
 
 def _init_database_schema() -> None:
@@ -96,6 +104,27 @@ app.add_middleware(
 )
 app.add_middleware(NoBufferMiddleware)
 
+
+@app.exception_handler(OperationalError)
+async def database_operational_error_handler(_request: Request, exc: OperationalError):
+    msg = _db_unavailable_message(exc)
+    logger.warning("database.request_failed: %s", exc)
+    return JSONResponse(
+        status_code=503,
+        content={"detail": msg, "database": {"ok": False, "error": msg}},
+    )
+
+
+@app.exception_handler(SQLAlchemyError)
+async def database_error_handler(_request: Request, exc: SQLAlchemyError):
+    msg = _db_unavailable_message(exc)
+    logger.warning("database.request_failed: %s", exc)
+    return JSONResponse(
+        status_code=503,
+        content={"detail": msg, "database": {"ok": False, "error": msg}},
+    )
+
+
 # Include routers
 app.include_router(filters.router)
 app.include_router(categories.router)
@@ -149,29 +178,6 @@ async def list_categories():
 @app.get("/categories/hierarchy")
 async def category_hierarchy():
     return get_category_hierarchy()
-
-
-@app.get("/categories/business/hierarchy")
-async def business_category_hierarchy():
-    """Full business taxonomy (main → sub → line items) for add expense."""
-    from app.data.business_taxonomy import get_taxonomy_hierarchy
-
-    return get_taxonomy_hierarchy()
-
-
-@app.get("/budgets/monthly")
-async def monthly_budget_grid_root(
-    financial_year: str = Query("FY2025-26", description="e.g. FY2025-26"),
-    db: Session = Depends(get_db),
-    user: User = Depends(get_current_user),
-):
-    """Monthly budget grid — also registered on expense_workflow router."""
-    from app.services.budget_service import monthly_budget_grid
-
-    try:
-        return monthly_budget_grid(db, user.id, financial_year)
-    except ValueError as exc:
-        raise HTTPException(400, str(exc)) from exc
 
 
 @app.get("/policy-types")

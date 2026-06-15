@@ -23,13 +23,15 @@ _ENV_FILE = _resolve_env_file()
 
 class Settings(BaseSettings):
     database_url: str
-    # SQLAlchemy pool — keep low for managed Postgres (e.g. Aiven ~20–25 max connections)
-    db_pool_size: int = 3
-    db_max_overflow: int = 2
+    # NullPool = one connection per request, released immediately (required for low Aiven limits)
+    db_use_null_pool: bool = True
+    db_pool_size: int = 1
+    db_max_overflow: int = 0
     db_pool_recycle: int = 1800
-    db_pool_timeout: int = 30
+    db_pool_timeout: int = 10
     db_pool_pre_ping: bool = True
-    db_use_null_pool: bool = False
+    uvicorn_workers: int = 1
+    uvicorn_limit_concurrency: int = 40
     upload_dir: str = "/tmp/bizwy-uploads"
     max_upload_size: int = 10485760
     allowed_extensions: List[str] = ["jpg", "jpeg", "png", "pdf", "webp", "avi"]

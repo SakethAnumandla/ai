@@ -3,7 +3,7 @@ import logging
 from sqlalchemy import create_engine
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
-from sqlalchemy.pool import NullPool, QueuePool
+from sqlalchemy.pool import NullPool
 
 from app.config import settings
 
@@ -13,32 +13,13 @@ _connect_args = {"connect_timeout": 10}
 if "sslmode=require" in settings.database_url or "aivencloud.com" in settings.database_url:
     _connect_args["sslmode"] = "require"
 
-_use_null_pool = settings.db_use_null_pool
-
-if _use_null_pool:
-    engine = create_engine(
-        settings.database_url,
-        poolclass=NullPool,
-        connect_args=_connect_args,
-    )
-    logger.info("database.engine pool=null")
-else:
-    engine = create_engine(
-        settings.database_url,
-        poolclass=QueuePool,
-        pool_size=settings.db_pool_size,
-        max_overflow=settings.db_max_overflow,
-        pool_recycle=settings.db_pool_recycle,
-        pool_timeout=settings.db_pool_timeout,
-        pool_pre_ping=settings.db_pool_pre_ping,
-        connect_args=_connect_args,
-    )
-    logger.info(
-        "database.engine pool_size=%s max_overflow=%s (max ~%s connections per process)",
-        settings.db_pool_size,
-        settings.db_max_overflow,
-        settings.db_pool_size + settings.db_max_overflow,
-    )
+# NullPool only: no idle pooled connections — each request borrows one slot and releases it.
+engine = create_engine(
+    settings.database_url,
+    poolclass=NullPool,
+    connect_args=_connect_args,
+)
+logger.info("database.engine pool=null (single shared database, no connection pool)")
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
@@ -51,6 +32,9 @@ def get_db():
     db = SessionLocal()
     try:
         yield db
+    except Exception:
+        db.rollback()
+        raise
     finally:
         db.close()
 
@@ -68,7 +52,7 @@ def check_database() -> dict:
         if "connection slots" in msg.lower() or "too many clients" in msg.lower():
             msg = (
                 "PostgreSQL connection limit reached. "
-                "Stop pgAdmin/extra apps, restart backend, or use Aiven's connection pooler URL."
+                "Stop other apps using this database and restart the backend."
             )
         logger.warning("database.check failed: %s", exc)
         return {"ok": False, "error": msg[:500]}

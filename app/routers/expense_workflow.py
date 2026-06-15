@@ -23,7 +23,10 @@ from app.utils.expense_helpers import build_expense_response
 router = APIRouter(tags=["expense-workflow"])
 
 
-@router.get("/categories/business/hierarchy")
+@router.get(
+    "/categories/business/hierarchy",
+    operation_id="workflow_business_category_hierarchy",
+)
 async def business_category_hierarchy():
     return get_taxonomy_hierarchy()
 
@@ -33,7 +36,10 @@ async def approver_directory():
     return {"approvers": APPROVER_DIRECTORY}
 
 
-@router.get("/expenses/approvals/pending")
+@router.get(
+    "/expenses/approvals/pending",
+    operation_id="workflow_pending_expense_approvals",
+)
 async def pending_expense_approvals(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
@@ -42,7 +48,10 @@ async def pending_expense_approvals(
     return build_pending_expense_approval_queue(db, user.id)
 
 
-@router.get("/expenses/{expense_id}/approval-workflow")
+@router.get(
+    "/expenses/{expense_id}/approval-workflow",
+    operation_id="workflow_expense_approval_workflow",
+)
 async def expense_approval_workflow(
     expense_id: int,
     db: Session = Depends(get_db),
@@ -54,7 +63,10 @@ async def expense_approval_workflow(
     return build_expense_approval_workflow_payload(expense)
 
 
-@router.post("/expenses/approvals/{approval_id}/action")
+@router.post(
+    "/expenses/approvals/{approval_id}/action",
+    operation_id="workflow_expense_approval_action",
+)
 async def expense_approval_action(
     approval_id: int,
     body: ExpenseApprovalAction,
@@ -76,7 +88,7 @@ async def expense_approval_action(
         raise HTTPException(400, str(exc)) from exc
 
 
-@router.get("/budgets/monthly")
+@router.get("/budgets/monthly", operation_id="workflow_monthly_budget_grid")
 async def monthly_budget_vs_actual(
     financial_year: str = Query("FY2025-26", description="e.g. FY2025-26"),
     db: Session = Depends(get_db),

@@ -279,7 +279,7 @@ class User(Base):
     
     # Manager relationship
     manager = relationship("User", remote_side=[id], foreign_keys=[manager_id])
-    subordinates = relationship("User", foreign_keys=[manager_id])
+    subordinates = relationship("User", foreign_keys=[manager_id], overlaps="manager")
 
 # ==================== Policy Models ====================
 
@@ -348,7 +348,7 @@ class Policy(Base):
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
     
     # Relationships
-    creator = relationship("User", foreign_keys=[created_by])
+    creator = relationship("User", foreign_keys=[created_by], overlaps="policies_created")
     claims = relationship("Claim", back_populates="policy", cascade="all, delete-orphan")
     
     __table_args__ = (
@@ -423,7 +423,7 @@ class Claim(Base):
     
     # Relationships
     policy = relationship("Policy", back_populates="claims")
-    user = relationship("User", foreign_keys=[user_id])
+    user = relationship("User", foreign_keys=[user_id], overlaps="claims")
     approvals = relationship("ClaimApproval", back_populates="claim", cascade="all, delete-orphan")
     expense = relationship("Expense", back_populates="claim", uselist=False)
 
@@ -466,7 +466,7 @@ class ClaimApproval(Base):
     
     # Relationships
     claim = relationship("Claim", back_populates="approvals")
-    approver = relationship("User", foreign_keys=[approver_id])
+    approver = relationship("User", foreign_keys=[approver_id], overlaps="approvals")
     
     __table_args__ = (
         Index('ix_claim_approvals_claim_status', 'claim_id', 'status'),
