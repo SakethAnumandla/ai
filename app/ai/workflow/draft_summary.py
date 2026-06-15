@@ -43,9 +43,7 @@ def format_draft_summary(slots: Dict[str, Any], *, intro: str = "Perfect 👍") 
     lines.extend(
         [
             "",
-            "Would you like me to submit this expense for approval?",
-            "",
-            "Reply **yes** to submit, or **no** to cancel.",
+            "Review the details above. Tap **Edit** to change a field, **Upload bill** to attach a receipt, or **Submit** to send for approval.",
         ]
     )
     return "\n".join(lines)

@@ -37,6 +37,7 @@ from app.utils.expense_validation import (
 )
 from app.utils.file_upload import process_multiple_files, process_single_file
 from app.utils.tax_form_parser import parse_tax_lines_form
+from app.utils.async_io import run_blocking
 
 
 @dataclass
@@ -229,12 +230,13 @@ class ManualExpenseService:
                 )
 
         try:
-            expense, prefill, is_dup, err = create_ocr_draft(
+            expense, prefill, is_dup, err = await run_blocking(
+                create_ocr_draft,
                 self.db,
                 user.id,
                 processed,
-                batch_id=None,
-                bill_index=1,
+                None,
+                1,
                 force_rescan=force_duplicate,
             )
         except OcrScanUnreadable as unreadable:
@@ -247,8 +249,13 @@ class ManualExpenseService:
                 },
             ) from unreadable
         if err or not expense:
-            expense, prefill, is_dup = create_manual_upload_draft(
-                self.db, user.id, processed, batch_id=None, bill_index=1
+            expense, prefill, is_dup = await run_blocking(
+                create_manual_upload_draft,
+                self.db,
+                user.id,
+                processed,
+                None,
+                1,
             )
 
         self.db.commit()

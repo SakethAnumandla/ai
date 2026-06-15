@@ -52,6 +52,7 @@ from app.utils.expense_helpers import (
 )
 from app.utils.file_upload import process_multiple_files, process_single_file
 from app.utils.ocr_categories import resolve_classification
+from app.utils.async_io import run_blocking
 
 _ocr_processor = OCRProcessor()
 
@@ -114,8 +115,13 @@ class OcrApiService:
         for fi in file_infos:
             fi["is_primary"] = True
             fi["file_extension"] = fi["file_name"].rsplit(".", 1)[-1].lower()
-        result = process_multi_file_drafts(
-            self.db, user.id, file_infos, use_ocr=True, force_rescan=force_rescan
+        result = await run_blocking(
+            process_multi_file_drafts,
+            self.db,
+            user.id,
+            file_infos,
+            use_ocr=True,
+            force_rescan=force_rescan,
         )
         return to_multi_bill_response(result, self.db)
 
@@ -219,19 +225,24 @@ class OcrApiService:
                 return build_expense_response(existing, is_duplicate=True)
 
         if as_draft:
-            err: Optional[str] = None
-            expense = None
-            try:
-                expense, _prefill, _dup, err = create_ocr_draft(
-                    self.db, user.id, file_info, None, 1, force_rescan
-                )
-            except Exception as exc:
-                err = str(exc)
-            if err or not expense:
-                expense, _prefill, _dup = create_manual_upload_draft(
-                    self.db, user.id, file_info, None, 1
-                )
-            self.db.commit()
+
+            def _scan_as_draft() -> Expense:
+                err: Optional[str] = None
+                expense = None
+                try:
+                    expense, _prefill, _dup, err = create_ocr_draft(
+                        self.db, user.id, file_info, None, 1, force_rescan
+                    )
+                except Exception as exc:
+                    err = str(exc)
+                if err or not expense:
+                    expense, _prefill, _dup = create_manual_upload_draft(
+                        self.db, user.id, file_info, None, 1
+                    )
+                self.db.commit()
+                return expense
+
+            expense = await run_blocking(_scan_as_draft)
             expense = (
                 self.db.query(Expense)
                 .options(joinedload(Expense.files))
@@ -360,8 +371,13 @@ class OcrApiService:
             for fi in file_infos:
                 fi["is_primary"] = True
                 fi["file_extension"] = fi["file_name"].rsplit(".", 1)[-1].lower()
-            result = process_multi_file_drafts(
-                self.db, user.id, file_infos, use_ocr=True, force_rescan=force_rescan
+            result = await run_blocking(
+                process_multi_file_drafts,
+                self.db,
+                user.id,
+                file_infos,
+                use_ocr=True,
+                force_rescan=force_rescan,
             )
             return to_multi_bill_response(result, self.db)
 

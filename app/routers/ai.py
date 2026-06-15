@@ -1,5 +1,4 @@
 """AI copilot API."""
-import asyncio
 import logging
 from typing import List, Optional
 
@@ -32,6 +31,7 @@ from app.models import AIChatSession, User
 from sqlalchemy import desc, func
 from app.ai.models.entities import AIConversation
 from app.utils.file_upload import process_multiple_files
+from app.utils.async_io import run_blocking
 
 logger = logging.getLogger(__name__)
 
@@ -99,7 +99,11 @@ async def ai_chat(
     result = await orchestrator.handle_user_message(
         ctx, body.message, user=user
     )
-    return _build_chat_response(result)
+    return _build_chat_response(
+        result,
+        expense_previews=result.get("expense_previews"),
+        ui_actions=result.get("ui_actions"),
+    )
 
 
 @router.post("/chat/upload", response_model=ChatResponse)
@@ -150,7 +154,7 @@ async def ai_chat_with_attachments(
     )
 
     if receipt_infos:
-        scan = await asyncio.to_thread(
+        scan = await run_blocking(
             run_chat_receipt_scans,
             db,
             user,
@@ -191,8 +195,9 @@ async def ai_chat_with_attachments(
                 await memory.set_draft_expense(ctx, scan.draft_contexts[-1])
             preview_hint = (
                 "I've scanned your receipt and updated the expense details. "
-                "Review the preview below, then **Edit** any field or **Submit**."
+                "Review the preview below, then tap **Edit** or **Submit for approval**."
             )
+            intent_message = "Receipt uploaded — show updated expense summary."
         elif scan.results:
             # Exit OCR "attach a receipt" wait — draft + preview cards carry state forward.
             await memory.clear_workflow_state(ctx)
@@ -255,10 +260,13 @@ async def ai_chat_with_attachments(
         for card in expense_previews:
             card_actions.extend(card.actions)
 
+    workflow_actions = result.get("ui_actions") or []
+    merged_previews = expense_previews or result.get("expense_previews")
+
     return _build_chat_response(
         result,
-        expense_previews=expense_previews,
-        ui_actions=card_actions or None,
+        expense_previews=merged_previews,
+        ui_actions=card_actions or workflow_actions or None,
     )
 
 

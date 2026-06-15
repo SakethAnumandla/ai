@@ -93,6 +93,8 @@ class StateMachineResult(BaseModel):
     ready_arguments: Dict[str, Any] = Field(default_factory=dict)
     updated_state: Optional[ConversationWorkflowState] = None
     clear_state: bool = False
+    ui_actions: Optional[List[Any]] = None
+    sync_draft: bool = False
 
 
 class ContinuityResult(BaseModel):

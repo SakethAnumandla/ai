@@ -10,6 +10,7 @@ from app.ai.schemas.chat_ui import (
     ExpensePreviewCard,
     build_fields_from_prefill,
     default_expense_card_actions,
+    workflow_summary_actions,
 )
 from app.intelligence.schemas import ReceiptPipelineResult
 from app.models import Expense
@@ -115,4 +116,57 @@ def global_attach_action() -> ChatUIAction:
         action="attach",
         label="Attach receipt",
         style="secondary",
+    )
+
+
+def build_workflow_preview_card(
+    db: Session,
+    *,
+    expense_id: int,
+    slots: dict,
+) -> Optional[ExpensePreviewCard]:
+    """Preview card for manual chatbot workflow after draft is persisted."""
+    expense = (
+        db.query(Expense)
+        .options(joinedload(Expense.files))
+        .filter(Expense.id == expense_id)
+        .first()
+    )
+    if not expense:
+        return None
+
+    resp = build_expense_response(expense)
+    prefill = {
+        "bill_name": expense.bill_name,
+        "bill_amount": expense.bill_amount,
+        "vendor_name": expense.vendor_name or slots.get("vendor_name"),
+        "main_category": (
+            expense.main_category.value if expense.main_category else slots.get("main_category")
+        ),
+        "sub_category": expense.sub_category or slots.get("sub_category"),
+        "payment_method": (
+            expense.payment_method.value if expense.payment_method else slots.get("payment_method")
+        ),
+        "description": expense.description or slots.get("description"),
+        "bill_date": expense.bill_date,
+    }
+    status = expense.status.value if expense.status else "draft"
+    return ExpensePreviewCard(
+        expense_id=expense.id,
+        bill_name=expense.bill_name,
+        bill_amount=expense.bill_amount,
+        currency_code=expense.currency_code or "EUR",
+        vendor_name=expense.vendor_name,
+        main_category=expense.main_category.value if expense.main_category else None,
+        sub_category=expense.sub_category,
+        payment_method=(
+            expense.payment_method.value if expense.payment_method else None
+        ),
+        bill_date=expense.bill_date.isoformat() if expense.bill_date else None,
+        status=status,
+        preview_url=resp.preview_url,
+        thumbnail_url=resp.thumbnail_url,
+        can_preview=bool(resp.can_preview),
+        fields=build_fields_from_prefill(prefill),
+        actions=workflow_summary_actions(expense.id),
     )

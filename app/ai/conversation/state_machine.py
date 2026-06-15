@@ -2,9 +2,12 @@
 import logging
 import re
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
 logger = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    from app.ai.schemas.chat_ui import ChatUIAction
 
 from app.ai.conversation.expense_intent import describes_new_expense
 from app.ai.vendor_guard import looks_like_chat_command
@@ -20,13 +23,14 @@ from app.ai.tools.expense_create_enrichment import bill_name_needs_repair
 from app.ai.expense_extraction import user_description_from_message
 from app.ai.workflow.entity_extractor import ExpenseEntityExtractor
 # sub_category is inferred for food (never asked) — avoids UPI/cash being misread as category
-_SLOT_ORDER = ["bill_amount", "vendor_name", "payment_method", "main_category"]
+_SLOT_ORDER = ["bill_amount", "vendor_name", "main_category", "payment_method"]
 
 _SLOT_QUESTIONS = {
     "bill_amount": "What was the amount?",
     "vendor_name": "Which merchant or vendor was this with?",
     "payment_method": "How was this paid? (e.g. UPI, credit card, cash)",
     "main_category": "Which category should I use? (e.g. travel, food, miscellaneous)",
+    "description": "What description should I use for this expense?",
     "sub_category": (
         "What type of food expense is this? "
         "(e.g. restaurant, dining, cafe, office lunch, groceries)"
@@ -126,6 +130,8 @@ def merge_ocr_prefill_into_state(
     state.slots.pop(_CREATION_MODE_SLOT, None)
     sm = ConversationStateMachine()
     state.pending_slots = sm._recompute_pending_slots(state.slots)
+    if not state.pending_slots:
+        state.slots[_SUBMIT_CONFIRM_SLOT] = True
     state.updated_at = datetime.utcnow()
     return state
 
@@ -149,7 +155,28 @@ _IMMEDIATE_SUBMIT_RE = re.compile(
 _SUBMIT_CONFIRM_SLOT = "_awaiting_submit_confirm"
 _CREATION_MODE_SLOT = "_awaiting_creation_mode"
 _MANUAL_ATTACHMENT_SLOT = "_awaiting_attachment"
+_EDIT_FIELD_SLOT = "_awaiting_edit_field"
+_EDIT_TARGET_SLOT = "_edit_target_field"
 _MULTI_BILL_QUEUE_SLOT = "_multi_bill_queue"
+
+_EDIT_FIELD_LABELS = {
+    "vendor_name": "Vendor",
+    "bill_amount": "Amount",
+    "main_category": "Category",
+    "payment_method": "Payment method",
+    "description": "Description",
+}
+
+_EDIT_FIELD_ALIASES = {
+    "vendor": "vendor_name",
+    "merchant": "vendor_name",
+    "amount": "bill_amount",
+    "category": "main_category",
+    "payment": "payment_method",
+    "payment method": "payment_method",
+    "description": "description",
+    "desc": "description",
+}
 
 _CREATION_MODE_QUESTION = (
     "How would you like to create this expense?\n\n"
@@ -165,7 +192,8 @@ _OCR_WAIT_MESSAGE = (
 )
 
 _MANUAL_ATTACHMENT_QUESTION = (
-    "Almost done! Attach a receipt with 📎 (optional), or reply **skip** to continue."
+    "Please attach your expense bill using the **Upload bill** button below "
+    "(JPG, PNG, or PDF). Reply **skip** if you don't have a receipt."
 )
 
 _UPLOAD_CHOICE_RE = re.compile(
@@ -178,8 +206,19 @@ _MULTI_BILL_RE = re.compile(
     r"\b(\w+)\s+expense\s+and\s+(\w+)\s+expense\b|\b(travel|meal|meals|food|lunch|dinner|hotel|cab|fuel)\b\s+and\s+\b(travel|meal|meals|food|lunch|dinner|hotel|cab|fuel)\b",
     re.I,
 )
+_EDIT_FIELD_QUESTION = (
+    "Which field would you like to change?\n\n"
+    "• **Vendor** • **Amount** • **Category** • **Payment** • **Description**\n\n"
+    "Tap a field below or type its name."
+)
+
 _OCR_CANCEL_RE = re.compile(
     r"\b(cancel|never\s*mind|start\s*over|forget\s+it|stop)\b",
+    re.I,
+)
+
+_SKIP_ATTACHMENT_RE = re.compile(
+    r"^(skip|no|none|later|continue|next)$",
     re.I,
 )
 
@@ -223,6 +262,28 @@ def _parse_payment(value: str) -> Optional[str]:
         if alias in v:
             return canonical
     return None
+
+
+def _resolve_edit_field(text: str) -> Optional[str]:
+    lowered = (text or "").strip().lower()
+    if not lowered:
+        return None
+    if lowered in _EDIT_FIELD_ALIASES:
+        return _EDIT_FIELD_ALIASES[lowered]
+    for alias, slot in _EDIT_FIELD_ALIASES.items():
+        if alias in lowered:
+            return slot
+    for slot in _EDIT_FIELD_LABELS:
+        if slot.replace("_", " ") in lowered or slot in lowered:
+            return slot
+    return None
+
+
+def _summary_ui_actions(state: ConversationWorkflowState) -> List[Any]:
+    from app.ai.schemas.chat_ui import workflow_summary_actions
+
+    eid = state.expense_id or state.slots.get("expense_id")
+    return workflow_summary_actions(int(eid) if eid else None)
 
 
 class ConversationStateMachine:
@@ -443,6 +504,8 @@ class ConversationStateMachine:
             assistant_message=format_draft_summary(state.slots, intro="Got it 👍"),
             updated_state=state,
             clear_state=False,
+            ui_actions=_summary_ui_actions(state),
+            sync_draft=True,
         )
 
     def _handle_creation_mode_reply(
@@ -486,14 +549,16 @@ class ConversationStateMachine:
     ) -> Optional[StateMachineResult]:
         if not state.slots.get(_MANUAL_ATTACHMENT_SLOT):
             return None
-        lowered = (text or "").strip().lower()
-        if lowered in ("skip", "no", "none", "later", "continue", "next"):
+        if _SKIP_ATTACHMENT_RE.match((text or "").strip()):
             state.slots.pop(_MANUAL_ATTACHMENT_SLOT, None)
             return self._offer_submit_confirmation(state, text)
+        from app.ai.schemas.chat_ui import attachment_prompt_actions
+
         return StateMachineResult(
             handled=True,
             assistant_message=_MANUAL_ATTACHMENT_QUESTION,
             updated_state=state,
+            ui_actions=attachment_prompt_actions(),
         )
 
     def _handle_ocr_wait_reply(
@@ -537,7 +602,19 @@ class ConversationStateMachine:
     ) -> Optional[StateMachineResult]:
         if not state.slots.get(_SUBMIT_CONFIRM_SLOT):
             return None
-        from app.ai.confirmation.affirm import is_denial, is_submit_confirmation
+        from app.ai.confirmation.affirm import is_denial, is_edit_request, is_submit_confirmation
+
+        if is_edit_request(text):
+            state.slots.pop(_SUBMIT_CONFIRM_SLOT, None)
+            state.slots[_EDIT_FIELD_SLOT] = True
+            from app.ai.schemas.chat_ui import edit_field_actions
+
+            return StateMachineResult(
+                handled=True,
+                assistant_message=_EDIT_FIELD_QUESTION,
+                updated_state=state,
+                ui_actions=edit_field_actions(),
+            )
 
         if is_submit_confirmation(text):
             state.slots.pop(_SUBMIT_CONFIRM_SLOT, None)
@@ -551,6 +628,60 @@ class ConversationStateMachine:
                 clear_state=True,
             )
         return None
+
+    def _handle_edit_field_reply(
+        self, state: ConversationWorkflowState, text: str
+    ) -> Optional[StateMachineResult]:
+        if not state.slots.get(_EDIT_FIELD_SLOT):
+            return None
+        field = _resolve_edit_field(text)
+        if not field:
+            from app.ai.schemas.chat_ui import edit_field_actions
+
+            return StateMachineResult(
+                handled=True,
+                assistant_message=_EDIT_FIELD_QUESTION,
+                updated_state=state,
+                ui_actions=edit_field_actions(),
+            )
+        state.slots.pop(_EDIT_FIELD_SLOT, None)
+        state.slots[_EDIT_TARGET_SLOT] = field
+        return StateMachineResult(
+            handled=True,
+            assistant_message=slot_question(field),
+            updated_state=state,
+        )
+
+    def _handle_edit_value_reply(
+        self, state: ConversationWorkflowState, text: str
+    ) -> Optional[StateMachineResult]:
+        target = state.slots.get(_EDIT_TARGET_SLOT)
+        if not target:
+            return None
+        value = self._try_fill_slot(target, text, slots=state.slots)
+        if value is None and target == "description":
+            value = text.strip()
+        if value is None:
+            return StateMachineResult(
+                handled=True,
+                assistant_message=slot_question(target),
+                updated_state=state,
+            )
+        state.slots[target] = value
+        state.slots.pop(_EDIT_TARGET_SLOT, None)
+        self._apply_food_sub_category_inference(state.slots)
+        state.slots[_SUBMIT_CONFIRM_SLOT] = True
+        from app.ai.workflow.draft_summary import format_draft_summary
+
+        return StateMachineResult(
+            handled=True,
+            assistant_message=format_draft_summary(
+                state.slots, intro="Updated 👍"
+            ),
+            updated_state=state,
+            ui_actions=_summary_ui_actions(state),
+            sync_draft=True,
+        )
 
     def process_turn(
         self,
@@ -602,6 +733,14 @@ class ConversationStateMachine:
         if attach_reply is not None:
             return attach_reply
 
+        edit_field_reply = self._handle_edit_field_reply(state, text)
+        if edit_field_reply is not None:
+            return edit_field_reply
+
+        edit_value_reply = self._handle_edit_value_reply(state, text)
+        if edit_value_reply is not None:
+            return edit_value_reply
+
         pending_submit = self._handle_pending_submit_reply(state, text)
         if pending_submit is not None:
             return pending_submit
@@ -624,7 +763,9 @@ class ConversationStateMachine:
                     continue
                 state.fill_slot(k, v)
 
-        from app.ai.workflow.slot_parser import is_payment_method_text
+        from app.ai.workflow.slot_parser import is_payment_method_text, parse_slot_updates
+
+        explicit_updates = parse_slot_updates(text)
 
         while state.pending_slots:
             slot = state.pending_slots[0]
@@ -637,6 +778,8 @@ class ConversationStateMachine:
                 if pay:
                     state.fill_slot("payment_method", pay)
                     self._apply_food_sub_category_inference(state.slots)
+                    if not explicit_updates and len(text.split()) <= 6:
+                        break
                     continue
             value = self._try_fill_slot(slot, text, slots=state.slots)
             if value is None:
@@ -655,18 +798,24 @@ class ConversationStateMachine:
                 break
             state.fill_slot(slot, value)
             self._apply_food_sub_category_inference(state.slots)
+            if not explicit_updates and len(text.split()) <= 6:
+                break
 
         if not state.pending_slots:
             if (
                 state.slots.get("creation_mode") == "manual"
                 and not state.slots.get(_MANUAL_ATTACHMENT_SLOT)
                 and not state.slots.get("expense_id")
+                and state.slots.get("payment_method")
             ):
                 state.slots[_MANUAL_ATTACHMENT_SLOT] = True
+                from app.ai.schemas.chat_ui import attachment_prompt_actions
+
                 return StateMachineResult(
                     handled=True,
                     assistant_message=_MANUAL_ATTACHMENT_QUESTION,
                     updated_state=state,
+                    ui_actions=attachment_prompt_actions(),
                 )
             return self._offer_submit_confirmation(state, text)
 
@@ -701,6 +850,8 @@ class ConversationStateMachine:
             _SUBMIT_CONFIRM_SLOT,
             _CREATION_MODE_SLOT,
             _MANUAL_ATTACHMENT_SLOT,
+            _EDIT_FIELD_SLOT,
+            _EDIT_TARGET_SLOT,
             _MULTI_BILL_QUEUE_SLOT,
             "_source_utterance",
             "creation_mode",

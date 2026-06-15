@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 class ChatUIAction(BaseModel):
     """Client-renderable action (button) in the chat thread."""
 
-    action: str = Field(..., description="submit | edit | delete | attach | skip")
+    action: str = Field(..., description="submit | edit | delete | attach | skip | view_expense")
     label: str
     expense_id: Optional[int] = None
     fields: List[str] = Field(default_factory=list)
@@ -71,6 +71,62 @@ def default_expense_card_actions(expense_id: int, *, status: str) -> List[ChatUI
             )
         )
     return actions
+
+
+def workflow_summary_actions(expense_id: Optional[int] = None) -> List[ChatUIAction]:
+    """Edit / Submit / Upload bill buttons shown after manual slot collection."""
+    return [
+        ChatUIAction(
+            action="attach",
+            label="Upload bill",
+            expense_id=expense_id,
+            style="secondary",
+        ),
+        ChatUIAction(
+            action="edit",
+            label="Edit",
+            expense_id=expense_id,
+            style="secondary",
+        ),
+        ChatUIAction(
+            action="submit",
+            label="Submit for approval",
+            expense_id=expense_id,
+            style="primary",
+        ),
+    ]
+
+
+def attachment_prompt_actions() -> List[ChatUIAction]:
+    return [
+        ChatUIAction(action="attach", label="Upload bill", style="primary"),
+        ChatUIAction(action="skip", label="Skip", style="secondary"),
+    ]
+
+
+def edit_field_actions() -> List[ChatUIAction]:
+    fields = [
+        ("vendor_name", "Vendor"),
+        ("bill_amount", "Amount"),
+        ("main_category", "Category"),
+        ("payment_method", "Payment"),
+        ("description", "Description"),
+    ]
+    return [
+        ChatUIAction(action="edit", label=label, fields=[key], style="secondary")
+        for key, label in fields
+    ]
+
+
+def post_submit_actions(expense_id: int) -> List[ChatUIAction]:
+    return [
+        ChatUIAction(
+            action="view_expense",
+            label="View expense",
+            expense_id=expense_id,
+            style="primary",
+        ),
+    ]
 
 
 def format_field_label(key: str) -> str:

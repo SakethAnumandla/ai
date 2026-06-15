@@ -17,6 +17,7 @@ from app.schemas import get_all_categories, get_category_hierarchy, get_policy_t
 from app.ai.dependencies import shutdown_ai_redis
 from app.ai import models as _ai_models  # noqa: F401 — register AI tables with Base
 from app.models import AIChatSession  # noqa: F401 — register chat session table
+from app.middleware.no_buffer import NoBufferMiddleware
 
 logger = logging.getLogger(__name__)
 
@@ -96,6 +97,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(NoBufferMiddleware)
 
 # Include routers
 app.include_router(filters.router)

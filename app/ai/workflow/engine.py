@@ -1,16 +1,18 @@
 """Continue active expense workflows before general chat routing."""
 import logging
 from dataclasses import dataclass, field
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from sqlalchemy.orm import Session
 
+from app.ai.chat_ui import build_workflow_preview_card
 from app.ai.conversation.expense_manage import ExpenseManageWorkflow
 from app.ai.conversation.state_machine import ConversationStateMachine
 from app.ai.schemas.common import SessionContext, TenantUserContext
 from app.ai.schemas.memory import DraftExpenseContext, PendingIntent
 from app.ai.schemas.workflow import ConversationWorkflowState, WorkflowScope, WorkflowType
 from app.ai.services.memory_service import MemoryService
+from app.ai.workflow.draft_persist import persist_workflow_draft
 from app.ai.workflow.draft_summary import format_draft_summary
 from app.ai.workflow.slot_parser import (
     infer_food_sub_category,
@@ -18,6 +20,7 @@ from app.ai.workflow.slot_parser import (
     parse_slot_updates,
     sanitize_sub_category,
 )
+from app.models import User
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +31,8 @@ class WorkflowContinueResult:
     message: Optional[str] = None
     execute_tool: Optional[str] = None
     execute_arguments: Dict[str, Any] = field(default_factory=dict)
+    ui_actions: Optional[List[Any]] = None
+    expense_previews: Optional[List[Any]] = None
 
 
 class WorkflowEngine:
@@ -74,6 +79,7 @@ class WorkflowEngine:
         user_content: str,
         *,
         prefill: Optional[Dict[str, Any]] = None,
+        user: Optional[User] = None,
     ) -> WorkflowContinueResult:
         """
         Apply slot updates or advance slot-filling for an active expense workflow.
@@ -136,20 +142,34 @@ class WorkflowEngine:
                 state.pending_slots,
             )
             if not state.pending_slots:
+                state.slots["_awaiting_submit_confirm"] = True
+                if user and self._db:
+                    state, _ = persist_workflow_draft(self._db, user, state)
+                await self._persist(ctx, state)
+                synced = state
+                preview = self._preview_for_state(synced)
+                from app.ai.schemas.chat_ui import workflow_summary_actions
+
+                eid = synced.expense_id or synced.slots.get("expense_id")
                 return WorkflowContinueResult(
                     handled=True,
-                    message=format_draft_summary(state.slots),
+                    message=format_draft_summary(synced.slots),
+                    ui_actions=workflow_summary_actions(int(eid) if eid else None),
+                    expense_previews=[preview] if preview else None,
                 )
+            synced = await self._sync_draft_if_needed(ctx, state, user=user)
+            preview = self._preview_for_state(synced)
             return WorkflowContinueResult(
                 handled=True,
-                message=format_draft_summary(state.slots, intro="Updated draft"),
+                message=format_draft_summary(synced.slots, intro="Updated draft"),
+                expense_previews=[preview] if preview else None,
             )
 
         sm_result = self._sm.process_turn(
             user_content, state, session_id=ctx.session_id, prefill=prefill
         )
         if sm_result.handled:
-            return await self._finalize_sm_result(ctx, sm_result)
+            return await self._finalize_sm_result(ctx, sm_result, user=user)
 
         if is_workflow_slot_message(user_content):
             return WorkflowContinueResult(
@@ -260,9 +280,21 @@ class WorkflowEngine:
             )
         return WorkflowContinueResult(handled=False)
 
-    async def _finalize_sm_result(self, ctx, sm_result) -> WorkflowContinueResult:
+    async def _finalize_sm_result(
+        self, ctx, sm_result, *, user: Optional[User] = None
+    ) -> WorkflowContinueResult:
+        state = sm_result.updated_state
+        if state and sm_result.sync_draft and user and self._db is not None:
+            state, _ = persist_workflow_draft(self._db, user, state)
+            sm_result.updated_state = state
+
         if sm_result.updated_state:
             await self._persist(ctx, sm_result.updated_state)
+            state = sm_result.updated_state
+
+        preview = None
+        if state and (state.expense_id or state.slots.get("expense_id")) and self._db:
+            preview = self._preview_for_state(state)
 
         if sm_result.ready_tool_name:
             logger.info(
@@ -280,12 +312,44 @@ class WorkflowEngine:
             )
 
         if sm_result.assistant_message:
-            return WorkflowContinueResult(handled=True, message=sm_result.assistant_message)
+            return WorkflowContinueResult(
+                handled=True,
+                message=sm_result.assistant_message,
+                ui_actions=sm_result.ui_actions,
+                expense_previews=[preview] if preview else None,
+            )
 
         if sm_result.updated_state and not sm_result.updated_state.pending_slots:
             return WorkflowContinueResult(
                 handled=True,
                 message=format_draft_summary(sm_result.updated_state.slots),
+                ui_actions=sm_result.ui_actions,
+                expense_previews=[preview] if preview else None,
             )
 
         return WorkflowContinueResult(handled=False)
+
+    def _preview_for_state(self, state: ConversationWorkflowState):
+        if not self._db:
+            return None
+        eid = state.expense_id or state.slots.get("expense_id")
+        if not eid:
+            return None
+        return build_workflow_preview_card(
+            self._db, expense_id=int(eid), slots=state.slots
+        )
+
+    async def _sync_draft_if_needed(
+        self,
+        ctx: SessionContext,
+        state: ConversationWorkflowState,
+        *,
+        user: Optional[User] = None,
+    ) -> ConversationWorkflowState:
+        if not user or not self._db:
+            return state
+        if not state.slots.get("_awaiting_submit_confirm"):
+            return state
+        state, _ = persist_workflow_draft(self._db, user, state)
+        await self._persist(ctx, state)
+        return state

@@ -728,7 +728,7 @@ class AIOrchestrator:
 
         prefill = ReferenceResolver(self._db).resolve(user.id, user_content).apply_to_slots({})
         result = await self._workflow.continue_workflow(
-            ctx, user_content, prefill=prefill
+            ctx, user_content, prefill=prefill, user=user
         )
         if not result.handled:
             return None
@@ -742,8 +742,15 @@ class AIOrchestrator:
                 source_user_message=user_content,
             )
             content = await self.build_response(user_content, tool_results=[tool_result])
+            extra: Dict[str, Any] = {}
+            if tool_result.success and tool_result.data:
+                eid = tool_result.data.get("expense_id")
+                if eid and result.execute_tool in ("expense.create.v1", "expense.submit.v1"):
+                    from app.ai.schemas.chat_ui import post_submit_actions
+
+                    extra["ui_actions"] = post_submit_actions(int(eid))
             return await self._finalize_chat(
-                ctx, user, content, log_extra, tool_results=[tool_result]
+                ctx, user, content, log_extra, tool_results=[tool_result], extra=extra
             )
 
         if result.message:
@@ -753,12 +760,18 @@ class AIOrchestrator:
                 ctx.user_id,
                 extra=log_extra,
             )
+            extra = {}
+            if result.ui_actions:
+                extra["ui_actions"] = result.ui_actions
+            if result.expense_previews:
+                extra["expense_previews"] = result.expense_previews
             return await self._finalize_chat(
                 ctx,
                 user,
                 result.message,
                 log_extra,
                 metadata={"workflow": True},
+                extra=extra,
             )
         return None
 
@@ -1407,7 +1420,7 @@ class AIOrchestrator:
             ),
         }
         if tool_results:
-            out["tool_results"] = [r.model_dump() for r in tool_results]
+            out["tool_results"] = [r.model_dump(mode="json") for r in tool_results]
         if extra:
             out.update(extra)
         if meta.get("welcome"):

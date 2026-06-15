@@ -39,6 +39,7 @@ from app.services.ocr_draft_service import process_multi_file_drafts, to_multi_b
 from app.services.tax_service import TaxService
 from app.utils.expense_helpers import build_expense_detail_response, build_expense_response, build_tax_summary_response
 from app.utils.file_upload import process_multiple_files
+from app.utils.async_io import run_blocking
 
 router = APIRouter(prefix="/expenses", tags=["expenses"])
 
@@ -178,7 +179,13 @@ async def upload_files_as_drafts(
     for fi in file_infos:
         fi["is_primary"] = True
         fi["file_extension"] = fi["file_name"].rsplit(".", 1)[-1].lower()
-    result = process_multi_file_drafts(db, current_user.id, file_infos, use_ocr=False)
+    result = await run_blocking(
+        process_multi_file_drafts,
+        db,
+        current_user.id,
+        file_infos,
+        use_ocr=False,
+    )
     return to_multi_bill_response(result, db)
 
 

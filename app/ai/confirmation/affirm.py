@@ -24,6 +24,8 @@ def is_submit_confirmation(text: str) -> bool:
     stripped = (text or "").strip()
     if not stripped:
         return False
+    if is_submit_button(stripped):
+        return True
     if is_affirmation(stripped):
         return True
     from app.ai.vendor_guard import is_draft_confirmation
@@ -41,3 +43,26 @@ def is_submit_confirmation(text: str) -> bool:
 
 def is_denial(text: str) -> bool:
     return bool(_DENY_RE.match(text.strip()))
+
+
+_EDIT_RE = re.compile(
+    r"^(edit|change|modify|fix|update)(?:\s+(?:expense|field|details?))?$",
+    re.IGNORECASE,
+)
+
+
+def is_edit_request(text: str) -> bool:
+    stripped = (text or "").strip()
+    if not stripped:
+        return False
+    if _EDIT_RE.match(stripped):
+        return True
+    return bool(re.match(r"^\s*edit\b", stripped, re.IGNORECASE))
+
+
+def is_submit_button(text: str) -> bool:
+    """Match UI button label or short submit intent."""
+    stripped = (text or "").strip().lower()
+    if stripped in ("submit", "submit for approval", "submit expense"):
+        return True
+    return bool(re.match(r"^submit\s+for\s+approval", stripped, re.I))

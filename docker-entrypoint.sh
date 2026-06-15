@@ -6,7 +6,11 @@ PORT="${PORT:-8000}"
 
 if [ "$1" = "uvicorn" ]; then
   shift
-  exec uvicorn "$@" --host 0.0.0.0 --port "$PORT"
+  exec uvicorn "$@" \
+    --host 0.0.0.0 \
+    --port "$PORT" \
+    --timeout-keep-alive 120 \
+    --limit-concurrency "${UVICORN_LIMIT_CONCURRENCY:-200}"
 fi
 
 exec "$@"

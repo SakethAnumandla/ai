@@ -232,7 +232,14 @@ async def receipt_scan_sync(
 
     pipeline = ReceiptIntelligencePipeline(db)
     try:
-        result = pipeline.run_sync(user, file_info, force_rescan=force_rescan)
+        from app.utils.async_io import run_blocking
+
+        result = await run_blocking(
+            pipeline.run_sync,
+            user,
+            file_info,
+            force_rescan=force_rescan,
+        )
     except RuntimeError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
