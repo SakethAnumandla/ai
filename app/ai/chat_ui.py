@@ -10,7 +10,6 @@ from app.ai.schemas.chat_ui import (
     ExpensePreviewCard,
     build_fields_from_prefill,
     default_expense_card_actions,
-    workflow_summary_actions,
 )
 from app.intelligence.schemas import ReceiptPipelineResult
 from app.models import Expense
@@ -124,14 +123,6 @@ def format_preview_message(cards: List[ExpensePreviewCard]) -> str:
     )
 
 
-def global_attach_action() -> ChatUIAction:
-    return ChatUIAction(
-        action="attach",
-        label="Attach receipt",
-        style="secondary",
-    )
-
-
 def build_workflow_preview_card(
     db: Session,
     *,
@@ -181,5 +172,5 @@ def build_workflow_preview_card(
         thumbnail_url=resp.thumbnail_url,
         can_preview=bool(resp.can_preview),
         fields=build_fields_from_prefill(prefill),
-        actions=workflow_summary_actions(expense.id),
+        actions=default_expense_card_actions(expense.id, status=status),
     )

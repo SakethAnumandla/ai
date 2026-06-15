@@ -5,12 +5,12 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, UploadFile, status
 from sqlalchemy.orm import Session
 
-from app.ai.chat_ui import global_attach_action
+from app.ai.manual_chat_upload import attach_receipt_to_manual_workflow
 from app.ai.chat_attachments import (
     build_chat_attachment_bundle,
     build_chat_attachment_bundle_from_file_infos,
 )
-from app.ai.conversation.state_machine import merge_ocr_prefill_into_state
+from app.ai.conversation.state_machine import ConversationStateMachine
 from app.ai.dependencies import (
     get_ai_memory_service,
     get_ai_orchestrator,
@@ -23,8 +23,10 @@ from app.ai.receipt_chat import (
     run_chat_receipt_scans,
 )
 from app.ai.schemas.chat import ChatRequest, ChatResponse
+from app.ai.schemas.memory import PendingIntent
 from app.ai.schemas.chat_ui import ChatUIAction, ExpensePreviewCard
-from app.ai.schemas.conversation import ConversationMessageOut
+from app.ai.models.entities import AIConversation, ConversationRole
+from app.ai.schemas.conversation import ConversationMessageCreate, ConversationMessageOut
 from app.ai.security import build_session_context, resolve_tenant_id
 from app.ai.services.memory_service import MemoryService
 from app.config import settings
@@ -32,7 +34,6 @@ from app.database import get_db
 from app.dependencies import get_current_user
 from app.models import AIChatSession, User
 from sqlalchemy import desc, func
-from app.ai.models.entities import AIConversation
 from app.utils.file_upload import process_multiple_files
 from app.utils.async_io import run_blocking
 
@@ -46,11 +47,12 @@ def _build_chat_response(
     *,
     expense_previews: Optional[List[ExpensePreviewCard]] = None,
     ui_actions: Optional[List[ChatUIAction]] = None,
+    attachments_enabled: bool = False,
 ) -> ChatResponse:
     msg = result["message"]
-    actions = list(ui_actions or [])
-    if not any(a.action == "attach" for a in actions):
-        actions.insert(0, global_attach_action())
+    actions = list(ui_actions) if ui_actions else None
+    if actions is not None and not actions:
+        actions = None
     return ChatResponse(
         message=(
             msg
@@ -64,7 +66,7 @@ def _build_chat_response(
         requires_confirmation=bool(result.get("requires_confirmation")),
         confirmation_token=result.get("confirmation_token"),
         tool_results=result.get("tool_results"),
-        attachments_enabled=True,
+        attachments_enabled=attachments_enabled,
         expense_previews=expense_previews,
         ui_actions=actions,
     )
@@ -165,6 +167,49 @@ async def ai_chat_with_attachments(
         and workflow_state.slots.get("creation_mode") == "manual"
     )
 
+    if merge_into_workflow:
+        try:
+            updated_state, preview, preview_hint = attach_receipt_to_manual_workflow(
+                db, user, workflow_state, file_infos
+            )
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=str(exc),
+            ) from exc
+        await memory.set_workflow_state(ctx, updated_state)
+        sm = ConversationStateMachine()
+        await memory.set_draft_expense(ctx, sm.state_to_draft(updated_state))
+        await memory.set_pending_intent(
+            ctx,
+            PendingIntent(
+                intent_type="expense_create",
+                parameters={
+                    **updated_state.slots,
+                    "fields_pending": list(updated_state.pending_slots),
+                    "session_id": session_id,
+                },
+            ),
+        )
+        user_persist = message.strip() or "[Receipt attached]"
+        await orchestrator.store_memory(
+            ctx,
+            ConversationMessageCreate(role=ConversationRole.USER, content=user_persist),
+        )
+        assistant_msg = await orchestrator.store_memory(
+            ctx,
+            ConversationMessageCreate(role=ConversationRole.ASSISTANT, content=preview_hint),
+        )
+        card_actions = list(preview.actions) if preview else []
+        return _build_chat_response(
+            {
+                "message": assistant_msg,
+                "session_id": session_id,
+            },
+            expense_previews=[preview] if preview else None,
+            ui_actions=card_actions or None,
+        )
+
     scan = await run_blocking(
         run_chat_receipt_scans,
         db,
@@ -197,22 +242,6 @@ async def ai_chat_with_attachments(
             detail="; ".join(scan.errors),
         )
 
-    if merge_into_workflow and scan.results:
-        prefill = scan.results[-1].prefill or {}
-        expense_id = scan.results[-1].expense_id
-        merged = merge_ocr_prefill_into_state(
-            workflow_state,
-            prefill,
-            expense_id=expense_id,
-        )
-        await memory.set_workflow_state(ctx, merged)
-        if scan.draft_contexts:
-            await memory.set_draft_expense(ctx, scan.draft_contexts[-1])
-        preview_hint = (
-            "I've read your receipt and updated the expense details. "
-            "Review the preview below, then tap **Edit** or **Submit for approval**."
-        )
-        intent_message = "Receipt uploaded — show updated expense summary."
     elif scan.results:
         await memory.clear_workflow_state(ctx)
         await memory.clear_pending_intent(ctx)
@@ -220,7 +249,7 @@ async def ai_chat_with_attachments(
     if len(persist_message) > 32000:
         persist_message = persist_message[:31900] + "\n…[truncated]"
 
-    skip_workflow = bool(scan_tool_results) and not merge_into_workflow
+    skip_workflow = bool(scan_tool_results)
 
     result = await orchestrator.handle_user_message(
         ctx,

@@ -21,6 +21,9 @@ class ChatResponse(BaseModel):
     requires_confirmation: bool = False
     confirmation_token: Optional[str] = None
     tool_results: Optional[List[Dict[str, Any]]] = None
-    attachments_enabled: bool = True
+    attachments_enabled: bool = Field(
+        default=False,
+        description="When true, client may show inline attachment on the chat input (deprecated — prefer ui_actions).",
+    )
     expense_previews: Optional[List[ExpensePreviewCard]] = None
     ui_actions: Optional[List[ChatUIAction]] = None

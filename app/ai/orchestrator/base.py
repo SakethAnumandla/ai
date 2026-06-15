@@ -884,6 +884,19 @@ class AIOrchestrator:
 
     async def end_session(self, ctx: SessionContext, *, user: User) -> None:
         """Clear ephemeral session state (Redis + scoped workflow/draft memory)."""
+        state = await self._memory.get_workflow_state(ctx)
+        if state and self._db and state.slots.get("bill_amount"):
+            try:
+                from app.ai.workflow.draft_persist import persist_workflow_draft
+
+                persist_workflow_draft(self._db, user, state)
+                self._db.commit()
+            except Exception:
+                self._db.rollback()
+                logger.exception(
+                    "end_session_draft_persist_failed session_id=%s",
+                    ctx.session_id,
+                )
         await self._memory.clear_session_state(ctx)
         pending = self._confirmation.get_latest_pending_for_session(
             tenant_id=ctx.tenant_id, user_id=user.id, session_id=ctx.session_id

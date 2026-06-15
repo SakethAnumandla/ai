@@ -180,20 +180,19 @@ _EDIT_FIELD_ALIASES = {
 
 _CREATION_MODE_QUESTION = (
     "How would you like to create this expense?\n\n"
-    "• **Upload** — attach a receipt image or PDF (I'll read it with AI vision)\n"
-    "• **Manual** — enter details step by step\n\n"
-    "You can use the 📎 button anytime to attach a bill."
+    "• **Upload** — upload a receipt image or PDF (I'll read it with AI vision)\n"
+    "• **Manual** — enter details step by step"
 )
 
 _OCR_WAIT_MESSAGE = (
-    "Please attach your receipt (image or PDF) using the 📎 button. "
-    "I'll extract all the details automatically.\n\n"
+    "Tap **Upload receipt** below to attach your bill (image or PDF). "
+    "I'll extract the details automatically.\n\n"
     "You can also say **manual** to enter details yourself, or **cancel** to stop."
 )
 
 _MANUAL_ATTACHMENT_QUESTION = (
-    "Please attach your expense bill using the **Upload bill** button below "
-    "(JPG, PNG, or PDF). Reply **skip** if you don't have a receipt."
+    "Tap **Upload bill** below to attach your receipt (JPG, PNG, or PDF). "
+    "Reply **skip** if you don't have a receipt."
 )
 
 _UPLOAD_CHOICE_RE = re.compile(
@@ -523,11 +522,14 @@ class ConversationStateMachine:
         state.slots.pop(_CREATION_MODE_SLOT, None)
         state.slots["creation_mode"] = mode
         if mode == "ocr":
+            from app.ai.schemas.chat_ui import ocr_upload_actions
+
             state.pending_slots = []
             return StateMachineResult(
                 handled=True,
                 assistant_message=_OCR_WAIT_MESSAGE,
                 updated_state=state,
+                ui_actions=ocr_upload_actions(),
             )
         state.pending_slots = self._recompute_pending_slots(state.slots)
         next_slot = state.pending_slots[0] if state.pending_slots else None
@@ -565,6 +567,8 @@ class ConversationStateMachine:
         self, state: ConversationWorkflowState, text: str
     ) -> Optional[StateMachineResult]:
         """Let users switch to manual entry or cancel instead of looping on attach prompt."""
+        from app.ai.schemas.chat_ui import ocr_upload_actions
+
         if state.slots.get("creation_mode") != "ocr" or state.slots.get("expense_id"):
             return None
 
@@ -595,6 +599,7 @@ class ConversationStateMachine:
             handled=True,
             assistant_message=_OCR_WAIT_MESSAGE,
             updated_state=state,
+            ui_actions=ocr_upload_actions(),
         )
 
     def _handle_pending_submit_reply(
@@ -700,9 +705,17 @@ class ConversationStateMachine:
                     updated_state=state,
                 )
             if state.slots.get("creation_mode") == "ocr" and not state.slots.get("expense_id"):
+                from app.ai.schemas.chat_ui import ocr_upload_actions
+
                 ocr_reply = self._handle_ocr_wait_reply(state, text)
                 if ocr_reply is not None:
                     return ocr_reply
+                return StateMachineResult(
+                    handled=True,
+                    assistant_message=_OCR_WAIT_MESSAGE,
+                    updated_state=state,
+                    ui_actions=ocr_upload_actions(),
+                )
             if not state.pending_slots:
                 return self._offer_submit_confirmation(state, text)
             next_slot = state.pending_slots[0] if state.pending_slots else None
@@ -816,6 +829,7 @@ class ConversationStateMachine:
                     assistant_message=_MANUAL_ATTACHMENT_QUESTION,
                     updated_state=state,
                     ui_actions=attachment_prompt_actions(),
+                    sync_draft=True,
                 )
             return self._offer_submit_confirmation(state, text)
 

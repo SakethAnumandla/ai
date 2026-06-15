@@ -74,26 +74,19 @@ def default_expense_card_actions(expense_id: int, *, status: str) -> List[ChatUI
 
 
 def workflow_summary_actions(expense_id: Optional[int] = None) -> List[ChatUIAction]:
-    """Edit / Submit / Upload bill buttons shown after manual slot collection."""
+    """Edit / Submit buttons shown after manual slot collection (upload is a separate step)."""
+    if expense_id:
+        return default_expense_card_actions(expense_id, status="draft")
     return [
-        ChatUIAction(
-            action="attach",
-            label="Upload bill",
-            expense_id=expense_id,
-            style="secondary",
-        ),
-        ChatUIAction(
-            action="edit",
-            label="Edit",
-            expense_id=expense_id,
-            style="secondary",
-        ),
-        ChatUIAction(
-            action="submit",
-            label="Submit for approval",
-            expense_id=expense_id,
-            style="primary",
-        ),
+        ChatUIAction(action="edit", label="Edit", style="secondary"),
+        ChatUIAction(action="submit", label="Submit for approval", style="primary"),
+    ]
+
+
+def ocr_upload_actions() -> List[ChatUIAction]:
+    """Single upload button for OCR / receipt-scan creation mode."""
+    return [
+        ChatUIAction(action="attach", label="Upload receipt", style="primary"),
     ]
 
 
