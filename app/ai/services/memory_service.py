@@ -447,6 +447,9 @@ class MemoryService:
     async def clear_session_state(self, ctx: SessionContext) -> None:
         await self._store.clear_session_state(ctx)
 
+    async def mark_chat_session_inactive(self, ctx: SessionContext) -> None:
+        await asyncio.to_thread(self._repo.mark_chat_session_inactive, ctx)
+
     async def purge_expired_memories(self, ctx: TenantUserContext) -> int:
         return await asyncio.to_thread(self._repo.purge_expired_memories, ctx)
 

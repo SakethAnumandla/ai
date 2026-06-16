@@ -21,10 +21,6 @@ from app.utils.expense_business_fields import apply_business_fields
 from app.utils.expense_helpers import parse_payment_method
 
 
-def _company_id(user: User) -> int:
-    return int(getattr(user, "company_id", None) or 1)
-
-
 def _build_tool_args(slots: Dict[str, Any]) -> Dict[str, Any]:
     args = dict(slots)
     for internal in (
@@ -94,6 +90,8 @@ def persist_workflow_draft(
     db: Session,
     user: User,
     state: ConversationWorkflowState,
+    *,
+    company_id: Optional[int] = None,
 ) -> Tuple[ConversationWorkflowState, Optional[int]]:
     """
     Create or update a DRAFT expense from workflow slots.
@@ -107,7 +105,11 @@ def persist_workflow_draft(
 
     svc = ExpenseService(db)
     expense_id = state.expense_id or state.slots.get("expense_id")
-    company_id = _company_id(user)
+    resolved_company_id = int(
+        company_id
+        if company_id is not None
+        else (getattr(user, "company_id", None) or 1)
+    )
 
     parsed_date = datetime.utcnow()
     if tool_args.get("bill_date"):
@@ -148,9 +150,11 @@ def persist_workflow_draft(
                 int(expense_id),
                 user.id,
                 ExpenseUpdate(**update_fields),
-                company_id=company_id,
+                company_id=resolved_company_id,
             )
-        expense = svc.get_expense(int(expense_id), user.id, company_id)
+        expense = svc.get_expense(
+            int(expense_id), user.id, resolved_company_id
+        )
         if expense and tool_args.get("tax_amount") and float(tool_args["tax_amount"]) > 0:
             TaxService(db).import_from_ocr_breakdown(
                 expense, None, total_tax=float(tool_args["tax_amount"])
@@ -191,7 +195,7 @@ def persist_workflow_draft(
         user.id,
         UploadMethod.MANUAL,
         status=ExpenseStatus.DRAFT,
-        company_id=company_id,
+        company_id=resolved_company_id,
     )
     apply_business_fields(
         expense,

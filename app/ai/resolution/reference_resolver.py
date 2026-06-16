@@ -47,6 +47,20 @@ _CATEGORY_HINTS = {
 }
 
 
+def needs_expense_history(text: str) -> bool:
+    """True when the message references prior expenses (temporal / entity aliases)."""
+    lowered = (text or "").strip().lower()
+    if not lowered:
+        return False
+    for pattern, _ in _TEMPORAL_PATTERNS:
+        if re.search(pattern, lowered):
+            return True
+    for pattern, _ in _ENTITY_PATTERNS:
+        if re.search(pattern, lowered):
+            return True
+    return False
+
+
 class ReferenceResolver:
     """Resolve conversational references against recent user expenses (no vector DB)."""
 
@@ -86,13 +100,6 @@ class ReferenceResolver:
         if describes_new_expense(text):
             self._extract_new_expense_fields(text, result)
 
-        expenses = self._recent_expenses(user_id, company_id=company_id)
-        if not expenses:
-            return result
-
-        now = datetime.now(timezone.utc)
-        yesterday = self._yesterday(now)
-
         for pattern, label in _TEMPORAL_PATTERNS:
             if re.search(pattern, lowered):
                 result.temporal_label = label
@@ -102,6 +109,21 @@ class ReferenceResolver:
         for pattern, label in _ENTITY_PATTERNS:
             if re.search(pattern, lowered):
                 result.matched_phrases.append(label)
+
+        for hint, cat in _CATEGORY_HINTS.items():
+            if hint in lowered and not result.main_category:
+                result.main_category = cat
+                result.matched_phrases.append(f"category_hint:{cat}")
+
+        if not needs_expense_history(text):
+            return result
+
+        expenses = self._recent_expenses(user_id, company_id=company_id)
+        if not expenses:
+            return result
+
+        now = datetime.now(timezone.utc)
+        yesterday = self._yesterday(now)
 
         anchor: Optional[Expense] = None
 
@@ -144,11 +166,6 @@ class ReferenceResolver:
                     result.expense_id = e.id
                     result.notes.append(f"Last reimbursement-related expense #{e.id}.")
                     break
-
-        for hint, cat in _CATEGORY_HINTS.items():
-            if hint in lowered and not result.main_category:
-                result.main_category = cat
-                result.matched_phrases.append(f"category_hint:{cat}")
 
         return result
 

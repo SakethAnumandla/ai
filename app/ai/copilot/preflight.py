@@ -1,4 +1,5 @@
 """Phase 3 copilot pre-LLM pipeline — references, slots, continuity, context enrichment."""
+import asyncio
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
@@ -115,8 +116,11 @@ class CopilotPreflight:
             out.intercept_message = continuity.message
             return out
 
-        resolved = self._resolver.resolve(
-            user.id, user_content, company_id=getattr(user, "company_id", None) or 1
+        resolved = await asyncio.to_thread(
+            self._resolver.resolve,
+            user.id,
+            user_content,
+            company_id=getattr(user, "company_id", None) or 1,
         )
         out.resolved = resolved
         prefill = resolved.apply_to_slots({})

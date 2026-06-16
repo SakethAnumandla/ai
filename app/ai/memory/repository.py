@@ -269,6 +269,23 @@ class AIRepository:
         self.db.commit()
         return count
 
+    def mark_chat_session_inactive(self, ctx: SessionContext) -> None:
+        """Mark persisted chat session metadata as ended (messages are retained)."""
+        from app.models import AIChatSession
+
+        row = (
+            self.db.query(AIChatSession)
+            .filter(
+                AIChatSession.tenant_id == ctx.scoped_company_id,
+                AIChatSession.user_id == ctx.user_id,
+                AIChatSession.session_id == ctx.session_id,
+            )
+            .first()
+        )
+        if row:
+            row.is_active = False
+            self.db.commit()
+
     def fetch_latest_summary(self, ctx: SessionContext) -> Optional[AISummary]:
         return (
             self.db.query(AISummary)

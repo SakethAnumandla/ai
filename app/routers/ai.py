@@ -277,6 +277,8 @@ async def ai_chat_with_attachments(
     expense_previews = scan.expense_previews or None
     preview_hint = scan.assistant_hint
     if scan.results:
+        await memory.clear_workflow_state(ctx)
+        await memory.clear_pending_intent(ctx)
         intent_message = scan.intent_message
         persist_message = scan.persist_message
         llm_user_content = merge_multimodal_with_draft_context(
@@ -296,10 +298,6 @@ async def ai_chat_with_attachments(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="; ".join(scan.errors),
         )
-
-    elif scan.results:
-        await memory.clear_workflow_state(ctx)
-        await memory.clear_pending_intent(ctx)
 
     if len(persist_message) > 32000:
         persist_message = persist_message[:31900] + "\n…[truncated]"

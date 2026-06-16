@@ -153,7 +153,9 @@ class WorkflowEngine:
             )
             if not state.pending_slots:
                 if user and self._db:
-                    state, _ = persist_workflow_draft(self._db, user, state)
+                    state, _ = persist_workflow_draft(
+                        self._db, user, state, company_id=ctx.scoped_company_id
+                    )
                 await self._persist(ctx, state)
                 attach_result = self._sm._prompt_attachment_or_submit(state, user_content)
                 if attach_result.updated_state:
@@ -333,7 +335,9 @@ class WorkflowEngine:
     ) -> WorkflowContinueResult:
         state = sm_result.updated_state
         if state and sm_result.sync_draft and user and self._db is not None:
-            state, _ = persist_workflow_draft(self._db, user, state)
+            state, _ = persist_workflow_draft(
+                self._db, user, state, company_id=ctx.scoped_company_id
+            )
             sm_result.updated_state = state
 
         if sm_result.updated_state:
@@ -400,6 +404,8 @@ class WorkflowEngine:
             return state
         if not state.slots.get("_awaiting_submit_confirm"):
             return state
-        state, _ = persist_workflow_draft(self._db, user, state)
+        state, _ = persist_workflow_draft(
+            self._db, user, state, company_id=ctx.scoped_company_id
+        )
         await self._persist(ctx, state)
         return state

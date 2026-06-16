@@ -34,7 +34,14 @@ def attach_receipt_to_manual_workflow(
     Save uploaded files on the existing manual draft expense (no vision scan).
     Returns (updated_state, preview_card, assistant_message, category_picker, ui_actions).
     """
-    state, expense_id = persist_workflow_draft(db, user, workflow_state)
+    company_id = int(
+        workflow_state.slots.get("company_id")
+        or getattr(user, "company_id", None)
+        or 1
+    )
+    state, expense_id = persist_workflow_draft(
+        db, user, workflow_state, company_id=company_id
+    )
     if not expense_id:
         raise ValueError("Complete bill name, amount, vendor, and category before uploading.")
 
@@ -43,7 +50,7 @@ def attach_receipt_to_manual_workflow(
         .filter(
             Expense.id == expense_id,
             Expense.user_id == user.id,
-            Expense.company_id == getattr(user, "company_id", 1),
+            Expense.company_id == company_id,
         )
         .first()
     )

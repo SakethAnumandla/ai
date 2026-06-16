@@ -744,16 +744,33 @@ class AIOrchestrator:
         user_content: str,
         log_extra: Dict[str, Any],
     ) -> Optional[Dict[str, Any]]:
-        from app.ai.resolution.reference_resolver import ReferenceResolver
+        import asyncio
 
+        from app.ai.resolution.reference_resolver import ReferenceResolver, needs_expense_history
         from app.ai.security import scoped_company_id
 
+        state, draft, pending = await self._workflow.get_active_context(ctx)
+        has_active = state is not None
+        if not has_active and draft and (
+            draft.fields_pending or self._workflow._draft_incomplete(draft)
+        ):
+            has_active = True
+        if not has_active and pending and pending.intent_type == "expense_create":
+            has_active = True
+        if not has_active:
+            return None
+
         company_id = scoped_company_id(ctx, user)
-        prefill = (
-            ReferenceResolver(self._db)
-            .resolve(user.id, user_content, company_id=company_id)
-            .apply_to_slots({})
-        )
+        prefill: Dict[str, Any] = {}
+        if needs_expense_history(user_content):
+            resolved = await asyncio.to_thread(
+                ReferenceResolver(self._db).resolve,
+                user.id,
+                user_content,
+                company_id=company_id,
+            )
+            prefill = resolved.apply_to_slots({})
+
         result = await self._workflow.continue_workflow(
             ctx, user_content, prefill=prefill, user=user
         )
@@ -918,7 +935,9 @@ class AIOrchestrator:
             try:
                 from app.ai.workflow.draft_persist import persist_workflow_draft
 
-                persist_workflow_draft(self._db, user, state)
+                persist_workflow_draft(
+                    self._db, user, state, company_id=ctx.scoped_company_id
+                )
                 self._db.commit()
             except Exception:
                 self._db.rollback()
@@ -927,6 +946,7 @@ class AIOrchestrator:
                     ctx.session_id,
                 )
         await self._memory.clear_session_state(ctx)
+        await self._memory.mark_chat_session_inactive(ctx)
         pending = self._confirmation.get_latest_pending_for_session(
             tenant_id=ctx.tenant_id, user_id=user.id, session_id=ctx.session_id
         )
