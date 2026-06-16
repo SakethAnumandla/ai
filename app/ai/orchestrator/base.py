@@ -37,6 +37,7 @@ from app.ai.prompts.copilot_interactive import (
 )
 from app.ai.prompts.welcome import CHAT_WELCOME_MESSAGE, WELCOME_MESSAGE_METADATA, is_welcome_message
 from app.config import settings
+from app.ai.conversation.expense_manage import ExpenseManageWorkflow, detect_manage_action
 from app.ai.conversation.state_machine import (
     _POST_SAVE_FOLLOWUP_QUESTION,
 )
@@ -533,9 +534,10 @@ class AIOrchestrator:
     async def _generate_dynamic_welcome(self, user: User) -> Optional[str]:
         if not self._openai_ready() or not settings.openai_dynamic_welcome:
             return None
-        display = (user.full_name or user.username or "").strip()
+        display = (getattr(user, "full_name", None) or getattr(user, "username", None) or "").strip()
         first = display.split()[0] if display else "there"
-        role = getattr(user.role, "value", str(user.role or "employee"))
+        role_attr = getattr(user, "role", None)
+        role = getattr(role_attr, "value", None) or str(role_attr or "employee")
         messages = [
             {
                 "role": "system",

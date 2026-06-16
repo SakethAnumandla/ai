@@ -31,8 +31,8 @@ from app.ai.security import build_session_context_from_scope, assert_chat_sessio
 from app.ai.services.memory_service import MemoryService
 from app.config import settings
 from app.database import get_db
-from app.deps.scope import ExpenseScope, ScopedActor, get_expense_scope
-from app.models import AIChatSession
+from app.deps.scope import ExpenseScope, get_expense_scope
+from app.models import AIChatSession, User
 from sqlalchemy import desc, func
 from app.utils.file_upload import process_multiple_files
 from app.utils.async_io import run_blocking
@@ -42,8 +42,15 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/ai", tags=["ai"])
 
 
-def _actor(scope: ExpenseScope) -> ScopedActor:
-    return ScopedActor.from_scope(scope)
+def _user(db: Session, scope: ExpenseScope) -> User:
+    """Load ORM user for orchestrator (welcome, tools, role prompts)."""
+    row = db.query(User).filter(User.id == scope.user_id).first()
+    if not row:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"User {scope.user_id} not found",
+        )
+    return row
 
 
 def _ctx(scope: ExpenseScope, session_id: str):
@@ -125,9 +132,9 @@ async def ai_chat_welcome(
 ):
     """Fixed opening message when the user opens a chat session."""
     _guard_session(db, scope, session_id)
-    actor = _actor(scope)
+    user = _user(db, scope)
     ctx = _ctx(scope, session_id)
-    result = await orchestrator.ensure_session_welcome(ctx, user=actor)
+    result = await orchestrator.ensure_session_welcome(ctx, user=user)
     return _build_chat_response(result)
 
 
@@ -139,10 +146,10 @@ async def ai_chat(
     orchestrator: AIOrchestrator = Depends(get_ai_orchestrator),
 ):
     _guard_session(db, scope, body.session_id)
-    actor = _actor(scope)
+    user = _user(db, scope)
     ctx = _ctx(scope, body.session_id)
     result = await orchestrator.handle_user_message(
-        ctx, body.message, user=actor
+        ctx, body.message, user=user
     )
     return _build_chat_response(
         result,
@@ -182,7 +189,7 @@ async def ai_chat_with_attachments(
             detail="Add at least one file (image or PDF), or use POST /ai/chat with JSON.",
         )
 
-    actor = _actor(scope)
+    user = _user(db, scope)
     ctx = _ctx(scope, session_id)
     file_infos = await process_multiple_files(uploads)
     if not file_infos:
@@ -214,7 +221,7 @@ async def ai_chat_with_attachments(
         try:
             updated_state, preview, preview_hint, category_picker, upload_actions = (
                 attach_receipt_to_manual_workflow(
-                    db, actor, workflow_state, file_infos
+                    db, user, workflow_state, file_infos
                 )
             )
         except ValueError as exc:
@@ -261,7 +268,7 @@ async def ai_chat_with_attachments(
     scan = await run_blocking(
         run_chat_receipt_scans,
         db,
-        actor,
+        user,
         file_infos,
         user_message=message,
     )
@@ -302,7 +309,7 @@ async def ai_chat_with_attachments(
     result = await orchestrator.handle_user_message(
         ctx,
         intent_message,
-        user=actor,
+        user=user,
         persist_message=persist_message,
         llm_user_content=llm_user_content,
         skip_active_workflow=skip_workflow,
@@ -343,7 +350,8 @@ async def ai_chat_end(
 ):
     """End a chat session — clears workflow/draft session memory for this session_id."""
     _guard_session(db, scope, session_id)
-    await orchestrator.end_session(_ctx(scope, session_id), user=_actor(scope))
+    user = _user(db, scope)
+    await orchestrator.end_session(_ctx(scope, session_id), user=user)
 
 
 @router.get("/chat/sessions")
