@@ -202,6 +202,7 @@ _MANUAL_ATTACHMENT_SLOT = "_awaiting_attachment"
 _EDIT_FIELD_SLOT = "_awaiting_edit_field"
 _EDIT_TARGET_SLOT = "_edit_target_field"
 _MULTI_BILL_QUEUE_SLOT = "_multi_bill_queue"
+_OTHERS_DETAIL_SLOT = "_awaiting_others_detail"
 
 _EDIT_FIELD_LABELS = {
     "bill_name": "Bill name",
@@ -252,8 +253,8 @@ _OCR_WAIT_MESSAGE = (
 )
 
 _MANUAL_ATTACHMENT_QUESTION = (
-    "Please attach your bill using **Upload bill** below (JPG, PNG, or PDF). "
-    "A receipt is required for manual expenses."
+    "You can attach your bill using **Upload bill** below (JPG, PNG, or PDF), "
+    "or reply **skip** to continue without a file."
 )
 
 _UPLOAD_CHOICE_RE = re.compile(
@@ -358,17 +359,94 @@ class ConversationStateMachine:
         pending = self._maybe_require_sub_category(slots, pending)
         return [s for s in pending if slots.get(s) in (None, "", [])]
 
-    def _should_prompt_attachment(self, state: ConversationWorkflowState) -> bool:
-        s = state.slots
-        if not _is_manual(s):
+    def _needs_others_detail(self, slots: Dict[str, Any]) -> bool:
+        from app.ai.workflow.manual_slots import is_others_value
+
+        if slots.get("_others_detail_provided") or slots.get(_OTHERS_DETAIL_SLOT):
             return False
-        if s.get("_attachment_complete") or s.get(_MANUAL_ATTACHMENT_SLOT):
-            return False
-        if not s.get("main_category"):
-            return False
+        return any(
+            is_others_value(slots.get(key))
+            for key in ("main_category", "sub_category", "line_item")
+        )
+
+    def _others_detail_step(self, slots: Dict[str, Any]) -> str:
+        from app.ai.workflow.manual_slots import is_others_value
+
+        if is_others_value(slots.get("line_item")):
+            return "line_item"
+        if is_others_value(slots.get("sub_category")):
+            return "sub_category"
+        return "main_category"
+
+    def _prompt_others_detail(self, state: ConversationWorkflowState) -> StateMachineResult:
+        from app.ai.workflow.manual_slots import others_detail_question
+
+        state.slots[_OTHERS_DETAIL_SLOT] = self._others_detail_step(state.slots)
+        return StateMachineResult(
+            handled=True,
+            assistant_message=others_detail_question(step=state.slots[_OTHERS_DETAIL_SLOT]),
+            updated_state=state,
+            sync_draft=True,
+        )
+
+    def _handle_others_detail_reply(
+        self, state: ConversationWorkflowState, text: str
+    ) -> Optional[StateMachineResult]:
+        if not state.slots.get(_OTHERS_DETAIL_SLOT):
+            return None
+        from app.ai.workflow.manual_slots import apply_others_detail, others_detail_question
+
+        if not apply_others_detail(state.slots, text):
+            return StateMachineResult(
+                handled=True,
+                assistant_message=others_detail_question(step=state.slots[_OTHERS_DETAIL_SLOT]),
+                updated_state=state,
+            )
+        state.slots.pop(_OTHERS_DETAIL_SLOT, None)
+        state.pending_slots = self._recompute_pending_slots(state.slots)
+        if self._needs_others_detail(state.slots):
+            return self._prompt_others_detail(state)
         if not state.pending_slots:
-            return False
-        return state.pending_slots[0] == "sub_category"
+            return self._offer_submit_confirmation(state, text)
+        if self._should_prompt_attachment(state):
+            state.slots[_MANUAL_ATTACHMENT_SLOT] = True
+            from app.ai.schemas.chat_ui import attachment_prompt_actions
+
+            return StateMachineResult(
+                handled=True,
+                assistant_message=_MANUAL_ATTACHMENT_QUESTION,
+                updated_state=state,
+                ui_actions=attachment_prompt_actions(),
+                sync_draft=True,
+            )
+        next_slot = state.pending_slots[0]
+        return _prompt_for_slot(state, next_slot, intro="Saved your category description.")
+
+    def _after_category_slot_filled(
+        self, state: ConversationWorkflowState, slot: str, text: str
+    ) -> Optional[StateMachineResult]:
+        if not _is_manual(state.slots):
+            return None
+        from app.ai.workflow.manual_slots import normalize_slots_taxonomy
+
+        normalize_slots_taxonomy(state.slots)
+        if self._needs_others_detail(state.slots):
+            return self._prompt_others_detail(state)
+        if self._should_prompt_attachment(state):
+            state.slots[_MANUAL_ATTACHMENT_SLOT] = True
+            from app.ai.schemas.chat_ui import attachment_prompt_actions
+
+            return StateMachineResult(
+                handled=True,
+                assistant_message=_MANUAL_ATTACHMENT_QUESTION,
+                updated_state=state,
+                ui_actions=attachment_prompt_actions(),
+                sync_draft=True,
+            )
+        return None
+
+    def _should_prompt_attachment(self, state: ConversationWorkflowState) -> bool:
+        return False
 
     def _merge_entities_from_message(
         self,
@@ -555,17 +633,16 @@ class ConversationStateMachine:
         ctx = slots or {}
         if _is_manual(ctx):
             from app.ai.workflow.manual_slots import (
-                resolve_main_categories,
+                is_category_done_message,
+                merge_main_category_selection,
                 try_fill_manual_slot,
             )
 
             if slot == "main_category":
-                cats = resolve_main_categories(stripped)
-                if cats:
-                    ctx["selected_categories"] = cats
-                    if len(cats) > 1:
-                        ctx["extra_category_tags"] = cats[1:]
-                    return cats[0]
+                if merge_main_category_selection(ctx, stripped):
+                    return ctx["main_category"]
+                if is_category_done_message(stripped) and ctx.get("selected_categories"):
+                    return ctx["main_category"]
             val, _err = try_fill_manual_slot(slot, stripped, slots=ctx)
             if slot == "description" and val is None:
                 from app.ai.workflow.manual_slots import _SKIP_RE
@@ -611,17 +688,6 @@ class ConversationStateMachine:
         self, state: ConversationWorkflowState, text: str
     ) -> StateMachineResult:
         """All slots filled — ask to submit unless user already asked to submit now."""
-        if _is_manual(state.slots) and not state.slots.get("_attachment_complete"):
-            state.slots[_MANUAL_ATTACHMENT_SLOT] = True
-            from app.ai.schemas.chat_ui import attachment_prompt_actions
-
-            return StateMachineResult(
-                handled=True,
-                assistant_message=_MANUAL_ATTACHMENT_QUESTION,
-                updated_state=state,
-                ui_actions=attachment_prompt_actions(),
-                sync_draft=True,
-            )
         if self._wants_immediate_submit(text):
             return self._complete(state, submit_now=True)
         state.slots[_SUBMIT_CONFIRM_SLOT] = True
@@ -681,6 +747,13 @@ class ConversationStateMachine:
     ) -> Optional[StateMachineResult]:
         if not state.slots.get(_MANUAL_ATTACHMENT_SLOT):
             return None
+        if _SKIP_ATTACHMENT_RE.search((text or "").strip()):
+            state.slots.pop(_MANUAL_ATTACHMENT_SLOT, None)
+            state.slots["_attachment_complete"] = True
+            state.pending_slots = self._recompute_pending_slots(state.slots)
+            if not state.pending_slots:
+                return self._offer_submit_confirmation(state, text)
+            return _prompt_for_slot(state, state.pending_slots[0], intro="Okay — continuing without a file.")
         from app.ai.schemas.chat_ui import attachment_prompt_actions
 
         return StateMachineResult(
@@ -855,9 +928,10 @@ class ConversationStateMachine:
                     next_slot,
                     state.pending_slots,
                 )
+                return _prompt_for_slot(state, next_slot)
             return StateMachineResult(
                 handled=True,
-                assistant_message=slot_question(next_slot, slots=state.slots),
+                assistant_message="Let's continue with your expense.",
                 updated_state=state,
             )
 
@@ -884,11 +958,40 @@ class ConversationStateMachine:
         if edit_value_reply is not None:
             return edit_value_reply
 
+        others_reply = self._handle_others_detail_reply(state, text)
+        if others_reply is not None:
+            return others_reply
+
         pending_submit = self._handle_pending_submit_reply(state, text)
         if pending_submit is not None:
             return pending_submit
 
         self._merge_entities_from_message(state, text)
+
+        if (
+            state.pending_slots
+            and state.pending_slots[0] == "main_category"
+            and _is_manual(state.slots)
+        ):
+            from app.ai.workflow.manual_slots import (
+                is_category_done_message,
+                merge_main_category_selection,
+            )
+
+            if merge_main_category_selection(state.slots, text) and not is_category_done_message(
+                text
+            ):
+                selected = state.slots.get("selected_categories") or []
+                if len(selected) > 1:
+                    labels = ", ".join(str(c).replace("_", " ").title() for c in selected)
+                    return _prompt_for_slot(
+                        state,
+                        "main_category",
+                        intro=(
+                            f"Selected **{labels}**. Pick more categories or type **done** "
+                            "to continue."
+                        ),
+                    )
 
         if prefill:
             for k, v in prefill.items():
@@ -941,9 +1044,9 @@ class ConversationStateMachine:
             if not _is_manual(state.slots):
                 self._apply_food_sub_category_inference(state.slots)
             elif slot in ("main_category", "sub_category", "line_item"):
-                from app.ai.workflow.manual_slots import normalize_slots_taxonomy
-
-                normalize_slots_taxonomy(state.slots)
+                category_result = self._after_category_slot_filled(state, slot, text)
+                if category_result is not None:
+                    return category_result
             if self._should_prompt_attachment(state):
                 state.slots[_MANUAL_ATTACHMENT_SLOT] = True
                 from app.ai.schemas.chat_ui import attachment_prompt_actions
@@ -996,6 +1099,9 @@ class ConversationStateMachine:
             "_attachment_complete",
             "selected_categories",
             "extra_category_tags",
+            "others_description",
+            "_others_detail_provided",
+            _OTHERS_DETAIL_SLOT,
         ):
             args.pop(internal, None)
         bill_name = args.pop("bill_name", "expense")

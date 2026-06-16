@@ -40,6 +40,9 @@ def _build_tool_args(slots: Dict[str, Any]) -> Dict[str, Any]:
         "_attachment_complete",
         "selected_categories",
         "extra_category_tags",
+        "others_description",
+        "_others_detail_provided",
+        "_awaiting_others_detail",
     ):
         args.pop(internal, None)
 
@@ -65,7 +68,7 @@ def _build_tool_args(slots: Dict[str, Any]) -> Dict[str, Any]:
         "main_category": args.get("main_category"),
         "sub_category": sub or args.get("sub_category"),
         "line_item": args.get("line_item"),
-        "description": args.get("description"),
+        "description": args.get("description") or args.get("others_description"),
         "submitted_by_name": args.get("submitted_by_name"),
         "submitted_by_role": args.get("submitted_by_role"),
         "tax_amount": args.get("tax_amount"),

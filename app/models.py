@@ -49,6 +49,7 @@ class MainCategory(str, enum.Enum):
     FINANCE_BANKING = "finance_banking"
     OPERATIONS_SUPPLY = "operations_supply"
     TAXES_GOVT = "taxes_govt"
+    OTHERS = "others"
 
 # Sub Categories Constants
 class SubCategoryConstants:

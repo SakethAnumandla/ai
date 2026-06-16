@@ -124,6 +124,7 @@ async def scan_manual_expense(
     )
 
 
+
 @router.post("/manual", response_model=ExpenseResponse, status_code=status.HTTP_201_CREATED)
 async def create_manual_expense(
     bill_name: str = Form(...),
@@ -155,6 +156,7 @@ async def create_manual_expense(
     db: Session = Depends(get_db),
     current_user: ExpenseScope = Depends(get_expense_scope),
 ):
+    
     form = ManualExpenseForm(
         bill_name=bill_name,
         bill_amount=bill_amount,
@@ -282,8 +284,25 @@ async def submit_draft_expense(
     db: Session = Depends(get_db),
     current_user: ExpenseScope = Depends(get_expense_scope),
 ):
+    if body.save_as_draft:
+        body = body.model_copy(update={"confirm_submit": False})
     expense = ExpenseService(db).submit_draft(
         expense_id, current_user.user_id, body, company_id=current_user.company_id
+    )
+    return build_expense_response(_load_expense(db, expense.id, current_user))
+
+
+@router.post("/{expense_id}/draft", response_model=ExpenseResponse)
+async def save_draft_expense(
+    expense_id: int,
+    body: ExpenseSubmit,
+    db: Session = Depends(get_db),
+    current_user: ExpenseScope = Depends(get_expense_scope),
+):
+    """Save draft fields without submitting for approval."""
+    draft_body = body.model_copy(update={"save_as_draft": True, "confirm_submit": False})
+    expense = ExpenseService(db).submit_draft(
+        expense_id, current_user.user_id, draft_body, company_id=current_user.company_id
     )
     return build_expense_response(_load_expense(db, expense.id, current_user))
 

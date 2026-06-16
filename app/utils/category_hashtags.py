@@ -225,6 +225,7 @@ def main_category_from_manual(manual_value: str) -> MainCategory:
         "finance_banking": MainCategory.FINANCE_BANKING,
         "operations_supply": MainCategory.OPERATIONS_SUPPLY,
         "taxes_govt": MainCategory.TAXES_GOVT,
+        "others": MainCategory.OTHERS,
     }
     if key in business_map:
         return business_map[key]

@@ -50,8 +50,11 @@ def _money_label(amount: float, currency: Optional[str] = None) -> str:
 def _parse_category(value: Optional[str]) -> MainCategory:
     if not value:
         return MainCategory.MISCELLANEOUS
+    key = value.lower().strip()
+    if key == "others":
+        return MainCategory.OTHERS
     try:
-        return MainCategory(value.lower().strip())
+        return MainCategory(key)
     except ValueError:
         return MainCategory.MISCELLANEOUS
 

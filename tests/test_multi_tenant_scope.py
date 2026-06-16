@@ -255,20 +255,27 @@ class TestChatSessionIsolation:
 
 
 class TestManualExpenseApi:
-    def test_manual_expense_requires_file(self, client: TestClient):
+    def test_manual_expense_without_file_creates_draft(self, client: TestClient, db: Session):
         r = client.post(
             "/expenses/manual",
             params=scope_params(USER_A),
             data={
-                "bill_name": "Lunch",
+                "bill_name": "Lunch no file",
                 "bill_amount": "100",
                 "bill_date": "2026-06-16",
                 "main_category": "food",
                 "save_as_draft": "true",
             },
         )
-        assert r.status_code == 400
-        assert "file" in r.json().get("detail", "").lower()
+        assert r.status_code == 201, r.text[:500]
+        body = r.json()
+        eid = body["id"]
+        try:
+            assert body["bill_name"] == "Lunch no file"
+            assert body["status"] == "draft"
+        finally:
+            db.query(Expense).filter(Expense.id == eid).delete()
+            db.commit()
 
     def test_manual_expense_with_file_creates_draft(self, client: TestClient, db: Session):
         png = io.BytesIO(

@@ -518,6 +518,22 @@ def get_manual_categories_payload() -> Dict[str, Any]:
             for m in hierarchy["main_categories"]
         ],
         "hierarchy": hierarchy,
+        "required_fields": [
+            {"key": "bill_name", "label": "Expense name"},
+            {"key": "bill_amount", "label": "Amount"},
+            {"key": "bill_date", "label": "Date"},
+            {"key": "main_category", "label": "Category"},
+        ],
+        "optional_fields": [
+            {"key": "files", "label": "Receipt / bill attachment"},
+            {"key": "sub_category", "label": "Sub-category"},
+            {"key": "line_item", "label": "Line item"},
+            {"key": "vendor_name", "label": "Vendor"},
+            {"key": "description", "label": "Description"},
+            {"key": "payment_method", "label": "Payment method"},
+            {"key": "tax_amount", "label": "Tax amount"},
+            {"key": "hashtags", "label": "Hashtags"},
+        ],
     }
 
 

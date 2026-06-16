@@ -97,12 +97,6 @@ class ManualExpenseService:
     async def create_manual(
         self, user: User, form: ManualExpenseForm, files: List[UploadFile]
     ) -> ExpenseResponse:
-        if not files:
-            raise HTTPException(
-                status_code=400,
-                detail="Upload a receipt/bill file first. Use POST /expenses/manual/scan for OCR prefill.",
-            )
-
         expense_status = self._resolve_status(form)
         if form.bill_amount <= 0:
             raise HTTPException(status_code=400, detail="Amount must be greater than 0")

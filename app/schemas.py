@@ -47,6 +47,7 @@ class MainCategory(str, Enum):
     FINANCE_BANKING = "finance_banking"
     OPERATIONS_SUPPLY = "operations_supply"
     TAXES_GOVT = "taxes_govt"
+    OTHERS = "others"
 
 # Sub Categories enums
 class TravelSubCategory(str, Enum):
@@ -938,8 +939,8 @@ class ExpenseSubmit(BaseModel):
     submitted_by_name: Optional[str] = None
     submitted_by_role: Optional[str] = None
     confirm_submit: bool = Field(
-        False,
-        description="Must be true to lock expense and submit for approval (no further edits)",
+        True,
+        description="When true, lock expense and submit for approval (no further edits)",
     )
     save_as_draft: bool = Field(
         False,
@@ -959,9 +960,9 @@ class ExpenseSubmit(BaseModel):
     def validate_submit_confirmation(cls, values):
         if values.get("auto_approve"):
             return values
-        if not values.get("save_as_draft") and not values.get("confirm_submit"):
+        if values.get("save_as_draft") and values.get("confirm_submit"):
             raise ValueError(
-                "confirm_submit must be true to submit the expense for approval"
+                "Use save_as_draft=true or confirm_submit=true, not both."
             )
         return values
 
