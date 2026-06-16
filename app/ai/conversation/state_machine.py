@@ -196,6 +196,13 @@ _IMMEDIATE_SUBMIT_RE = re.compile(
     re.I,
 )
 
+_SKIPPED_SLOTS_KEY = "_skipped_slots"
+_GOT_IT_AFTER_ATTACHMENT = "Got it 👍"
+_POST_SAVE_FOLLOWUP_SLOT = "_awaiting_post_save_followup"
+_POST_SAVE_FOLLOWUP_QUESTION = (
+    "Your expense has been saved. Is there anything else I can help you with?"
+)
+_POST_SAVE_THANK_YOU = "Thank you! Have a great day. 👋"
 _SUBMIT_CONFIRM_SLOT = "_awaiting_submit_confirm"
 _CREATION_MODE_SLOT = "_awaiting_creation_mode"
 _MANUAL_ATTACHMENT_SLOT = "_awaiting_attachment"
@@ -356,9 +363,25 @@ class ConversationStateMachine:
 
     def _recompute_pending_slots(self, slots: Dict[str, Any]) -> List[str]:
         order = _active_slot_order(slots)
-        pending = [s for s in order if slots.get(s) in (None, "", [])]
+        skipped = set(slots.get(_SKIPPED_SLOTS_KEY) or [])
+        pending = [
+            s
+            for s in order
+            if slots.get(s) in (None, "", []) and s not in skipped
+        ]
         pending = self._maybe_require_sub_category(slots, pending)
-        return [s for s in pending if slots.get(s) in (None, "", [])]
+        return [
+            s
+            for s in pending
+            if slots.get(s) in (None, "", []) and s not in skipped
+        ]
+
+    @staticmethod
+    def _mark_slot_skipped(state: ConversationWorkflowState, slot: str) -> None:
+        skipped = list(state.slots.get(_SKIPPED_SLOTS_KEY) or [])
+        if slot not in skipped:
+            skipped.append(slot)
+        state.slots[_SKIPPED_SLOTS_KEY] = skipped
 
     def _needs_others_detail(self, slots: Dict[str, Any]) -> bool:
         from app.ai.workflow.manual_slots import is_others_value
@@ -659,7 +682,7 @@ class ConversationStateMachine:
                 if is_category_done_message(stripped) and ctx.get("selected_categories"):
                     return ctx["main_category"]
             val, _err = try_fill_manual_slot(slot, stripped, slots=ctx)
-            if slot == "description" and val is None:
+            if slot in ("description", "submitted_by_role") and val is None:
                 from app.ai.workflow.manual_slots import _SKIP_RE
 
                 if _SKIP_RE.match(stripped):
@@ -717,17 +740,21 @@ class ConversationStateMachine:
         if self._wants_immediate_submit(text):
             return self._complete(state, submit_now=True)
         state.slots[_SUBMIT_CONFIRM_SLOT] = True
-        from app.ai.workflow.draft_summary import format_draft_summary
-
-        has_bill = None
         if state.slots.get("_attachment_complete"):
-            has_bill = bool(state.slots.get("_bill_attached"))
+            summary_message = _GOT_IT_AFTER_ATTACHMENT
+        else:
+            from app.ai.workflow.draft_summary import format_draft_summary
+
+            has_bill = None
+            if state.slots.get("_attachment_complete"):
+                has_bill = bool(state.slots.get("_bill_attached"))
+            summary_message = format_draft_summary(
+                state.slots, intro="Got it 👍", has_bill=has_bill
+            )
 
         return StateMachineResult(
             handled=True,
-            assistant_message=format_draft_summary(
-                state.slots, intro="Got it 👍", has_bill=has_bill
-            ),
+            assistant_message=summary_message,
             updated_state=state,
             clear_state=False,
             ui_actions=_summary_ui_actions(state),
@@ -783,10 +810,8 @@ class ConversationStateMachine:
             state.slots.pop(_MANUAL_ATTACHMENT_SLOT, None)
             state.slots["_attachment_complete"] = True
             state.slots["_bill_attached"] = False
-            state.pending_slots = self._recompute_pending_slots(state.slots)
-            if not state.pending_slots:
-                return self._prompt_attachment_or_submit(state, text)
-            return _prompt_for_slot(state, state.pending_slots[0], intro="Okay — continuing without a file.")
+            state.pending_slots = []
+            return self._prompt_attachment_or_submit(state, text)
         from app.ai.schemas.chat_ui import attachment_prompt_actions
 
         return StateMachineResult(
@@ -999,7 +1024,13 @@ class ConversationStateMachine:
         if pending_submit is not None:
             return pending_submit
 
-        self._merge_entities_from_message(state, text)
+        should_merge_entities = not (
+            _is_manual(state.slots)
+            and state.pending_slots
+            and len((text or "").split()) <= 6
+        )
+        if should_merge_entities:
+            self._merge_entities_from_message(state, text)
 
         if (
             state.pending_slots
@@ -1072,8 +1103,9 @@ class ConversationStateMachine:
                     return _prompt_for_slot(state, slot)
                 break
             state.fill_slot(slot, value if value != "" else None)
-            if slot == "description" and value == "":
-                state.slots["description"] = None
+            if slot in ("description", "submitted_by_role") and value == "":
+                state.slots[slot] = None
+                self._mark_slot_skipped(state, slot)
             if not _is_manual(state.slots):
                 self._apply_food_sub_category_inference(state.slots)
             elif slot in ("main_category", "sub_category", "line_item"):
@@ -1127,6 +1159,8 @@ class ConversationStateMachine:
             _EDIT_FIELD_SLOT,
             _EDIT_TARGET_SLOT,
             _MULTI_BILL_QUEUE_SLOT,
+            _SKIPPED_SLOTS_KEY,
+            _POST_SAVE_FOLLOWUP_SLOT,
             "_source_utterance",
             "creation_mode",
             "_attachment_complete",
@@ -1140,6 +1174,9 @@ class ConversationStateMachine:
             args.pop(internal, None)
         bill_name = args.pop("bill_name", "expense")
         payment_method = args.pop("payment_method", None)
+        role = args.get("submitted_by_role")
+        if role and str(role).strip().lower() == "skip":
+            args.pop("submitted_by_role", None)
         if bill_name_needs_repair(bill_name) and args.get("vendor_name"):
             bill_name = str(args["vendor_name"])
         sub = _sanitize_sub_category(

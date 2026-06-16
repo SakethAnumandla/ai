@@ -37,7 +37,9 @@ from app.ai.prompts.copilot_interactive import (
 )
 from app.ai.prompts.welcome import CHAT_WELCOME_MESSAGE, WELCOME_MESSAGE_METADATA, is_welcome_message
 from app.config import settings
-from app.ai.conversation.expense_manage import ExpenseManageWorkflow, detect_manage_action
+from app.ai.conversation.state_machine import (
+    _POST_SAVE_FOLLOWUP_QUESTION,
+)
 from app.ai.workflow.engine import WorkflowEngine
 from app.ai.schemas.memory import DraftExpenseContext
 from app.ai.schemas.workflow import WorkflowType
@@ -247,6 +249,13 @@ class AIOrchestrator:
                         result = await self.confirm_tool_execution(
                             user=user, ctx=ctx, confirmation_token=pending.confirmation_token
                         )
+                        if result.success and pending.tool_name in (
+                            "expense.create.v1",
+                            "expense.submit.v1",
+                        ):
+                            return await self._finalize_expense_saved(
+                                ctx, user, message, log_extra, result
+                            )
                         content = await self.build_response(message, tool_results=[result])
                         return await self._finalize_chat(ctx, user, content, log_extra, tool_results=[result])
 
@@ -261,6 +270,10 @@ class AIOrchestrator:
                             arguments=draft_confirm_tool_arguments(receipt_draft),
                             source_user_message=receipt_draft.source_utterance or message,
                         )
+                        if result.success:
+                            return await self._finalize_expense_saved(
+                                ctx, user, message, log_extra, result
+                            )
                         content = await self.build_response(message, tool_results=[result])
                         return await self._finalize_chat(
                             ctx, user, content, log_extra, tool_results=[result]
@@ -753,16 +766,16 @@ class AIOrchestrator:
                 arguments=result.execute_arguments,
                 source_user_message=user_content,
             )
+            if (
+                tool_result.success
+                and result.execute_tool in ("expense.create.v1", "expense.submit.v1")
+            ):
+                return await self._finalize_expense_saved(
+                    ctx, user, user_content, log_extra, tool_result
+                )
             content = await self.build_response(user_content, tool_results=[tool_result])
-            extra: Dict[str, Any] = {}
-            if tool_result.success and tool_result.data:
-                eid = tool_result.data.get("expense_id")
-                if eid and result.execute_tool in ("expense.create.v1", "expense.submit.v1"):
-                    from app.ai.schemas.chat_ui import post_submit_actions
-
-                    extra["ui_actions"] = post_submit_actions(int(eid))
             return await self._finalize_chat(
-                ctx, user, content, log_extra, tool_results=[tool_result], extra=extra
+                ctx, user, content, log_extra, tool_results=[tool_result]
             )
 
         if result.message:
@@ -1393,6 +1406,33 @@ class AIOrchestrator:
                 self._preferences.learn_from_expense(tu, expense, source=tool_name)
                 self._graph.link_expense(tu, expense, workflow_state="pending")
                 await self._memory.clear_draft_expense(ctx)
+
+    async def _finalize_expense_saved(
+        self,
+        ctx: SessionContext,
+        user: User,
+        user_message: str,
+        log_extra: Dict[str, Any],
+        tool_result: ToolResult,
+    ) -> Dict[str, Any]:
+        extra: Dict[str, Any] = {}
+        eid = (tool_result.data or {}).get("expense_id")
+        if eid:
+            from app.ai.schemas.chat_ui import post_submit_actions
+
+            extra["ui_actions"] = post_submit_actions(int(eid))
+        await self._memory.set_workflow_state(
+            ctx,
+            self._workflow.post_save_followup_state(session_id=ctx.session_id),
+        )
+        return await self._finalize_chat(
+            ctx,
+            user,
+            _POST_SAVE_FOLLOWUP_QUESTION,
+            log_extra,
+            tool_results=[tool_result],
+            extra=extra,
+        )
 
     async def _finalize_chat(
         self,

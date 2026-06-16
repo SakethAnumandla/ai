@@ -7,7 +7,12 @@ from sqlalchemy.orm import Session
 
 from app.ai.chat_ui import build_workflow_preview_card
 from app.ai.conversation.expense_manage import ExpenseManageWorkflow
-from app.ai.conversation.state_machine import ConversationStateMachine
+from app.ai.conversation.state_machine import (
+    ConversationStateMachine,
+    _POST_SAVE_FOLLOWUP_QUESTION,
+    _POST_SAVE_FOLLOWUP_SLOT,
+    _POST_SAVE_THANK_YOU,
+)
 from app.ai.schemas.common import SessionContext, TenantUserContext
 from app.ai.schemas.memory import DraftExpenseContext, PendingIntent
 from app.ai.schemas.workflow import ConversationWorkflowState, WorkflowScope, WorkflowType
@@ -107,6 +112,9 @@ class WorkflowEngine:
 
         if state is None:
             return WorkflowContinueResult(handled=False)
+
+        if state.slots.get(_POST_SAVE_FOLLOWUP_SLOT):
+            return await self._handle_post_save_followup(ctx, user_content, state)
 
         if state.workflow_type in (WorkflowType.EXPENSE_DELETE, WorkflowType.EXPENSE_UPDATE):
             if self._db is None:
@@ -228,6 +236,42 @@ class WorkflowEngine:
             draft.bill_amount
             or draft.vendor_name
             or draft.fields_pending
+        )
+
+    async def _handle_post_save_followup(
+        self,
+        ctx: SessionContext,
+        user_content: str,
+        state: ConversationWorkflowState,
+    ) -> WorkflowContinueResult:
+        from app.ai.conversation.post_save import is_post_save_accept, is_post_save_decline
+
+        if is_post_save_decline(user_content):
+            await self._memory.clear_workflow_state(ctx)
+            await self._memory.clear_pending_intent(ctx)
+            return WorkflowContinueResult(
+                handled=True,
+                message=_POST_SAVE_THANK_YOU,
+            )
+        if is_post_save_accept(user_content):
+            await self._memory.clear_workflow_state(ctx)
+            await self._memory.clear_pending_intent(ctx)
+            return WorkflowContinueResult(
+                handled=True,
+                message="Sure — what would you like help with?",
+            )
+        return WorkflowContinueResult(
+            handled=True,
+            message=_POST_SAVE_FOLLOWUP_QUESTION,
+        )
+
+    @staticmethod
+    def post_save_followup_state(*, session_id: str) -> ConversationWorkflowState:
+        return ConversationWorkflowState(
+            workflow_type=WorkflowType.EXPENSE_CONTINUE,
+            scope=WorkflowScope.GENERAL,
+            slots={_POST_SAVE_FOLLOWUP_SLOT: True},
+            session_id=session_id,
         )
 
     async def persist_workflow_state(

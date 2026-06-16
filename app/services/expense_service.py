@@ -542,7 +542,14 @@ class ExpenseService:
         if pm is not None:
             expense.payment_method = parse_payment_method(pm)
 
-        if data.auto_approve:
+        from app.config import settings
+
+        use_auto = (
+            data.auto_approve
+            if data.auto_approve is not None
+            else settings.expense_self_auto_approve_enabled
+        )
+        if use_auto and not data.save_as_draft:
             if expense.user_id != user_id:
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,

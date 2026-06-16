@@ -2,17 +2,20 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import List, Optional
 
 from fastapi import HTTPException, UploadFile
 from sqlalchemy.orm import Session, joinedload
 
+from app.config import settings
 from app.data.business_taxonomy import normalize_taxonomy_fields, suggest_categories_from_text
 from app.models import Expense, ExpenseStatus, MainCategory, OCRBill, UploadMethod, User
 from app.schemas import BillDraftItem, BillPrefillData, ExpenseResponse
 from app.services.expense_access_service import ExpenseAccessService
 from app.services.expense_approval_service import create_expense_approval_workflow
 from app.services.expense_service import ExpenseService
+from app.services.wallet_service import WalletService
 from app.services.ocr_draft_service import (
     build_full_prefill_from_expense,
     coerce_bill_prefill,
@@ -88,6 +91,8 @@ class ManualExpenseService:
                 bill_amount=form.bill_amount,
                 main_category=form.main_category,
             )
+            if settings.expense_self_auto_approve_enabled:
+                return ExpenseStatus.APPROVED
             return ExpenseStatus.SUBMITTED
         raise HTTPException(
             status_code=400,
@@ -192,6 +197,9 @@ class ManualExpenseService:
 
         if expense_status == ExpenseStatus.SUBMITTED:
             create_expense_approval_workflow(self.db, expense)
+        elif expense_status == ExpenseStatus.APPROVED:
+            expense.approved_at = datetime.now(timezone.utc)
+            WalletService(self.db).update_wallet_balance(user.id, expense)
 
         self.db.commit()
         self.db.refresh(expense)

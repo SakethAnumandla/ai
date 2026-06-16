@@ -43,7 +43,9 @@ MANUAL_SLOT_QUESTIONS = {
     "line_item": "Select a **line item** below or type its name.",
     "tax_amount": "What is the **tax amount**? (Enter 0 or reply **skip** if none)",
     "submitted_by_name": "Who is **submitting** this bill? (Your name)",
-    "submitted_by_role": "What is your **role**? (e.g. employee, manager, finance)",
+    "submitted_by_role": (
+        "What is your **role**? (e.g. employee, manager, finance — or reply **skip**)"
+    ),
     "bill_date": "What is the **date of the bill**? (e.g. 15/06/2026 or today)",
     "description": "Add a **description** for this expense (or reply **skip**).",
 }
@@ -404,9 +406,11 @@ def try_fill_manual_slot(
         return None, "Please enter the submitter name."
 
     if slot == "submitted_by_role":
+        if _SKIP_RE.match(stripped):
+            return None, None
         if len(stripped) >= 2:
             return stripped[:128], None
-        return None, "Please enter your role."
+        return None, "Please enter your role or reply **skip**."
 
     if slot == "bill_date":
         if _TODAY_RE.match(stripped):

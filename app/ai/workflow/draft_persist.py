@@ -44,6 +44,8 @@ def _build_tool_args(slots: Dict[str, Any]) -> Dict[str, Any]:
         "others_description",
         "_others_detail_provided",
         "_awaiting_others_detail",
+        "_skipped_slots",
+        "_awaiting_post_save_followup",
     ):
         args.pop(internal, None)
 
@@ -61,6 +63,10 @@ def _build_tool_args(slots: Dict[str, Any]) -> Dict[str, Any]:
     )
 
     normalize_slots_taxonomy(args)
+
+    role = args.get("submitted_by_role")
+    if role and str(role).strip().lower() == "skip":
+        args.pop("submitted_by_role", None)
 
     tool_args: Dict[str, Any] = {
         "bill_name": bill_name,

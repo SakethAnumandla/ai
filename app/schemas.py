@@ -946,7 +946,7 @@ class ExpenseSubmit(BaseModel):
         False,
         description="If true, save changes but keep as draft (editable)",
     )
-    auto_approve: bool = False
+    auto_approve: Optional[bool] = None
 
     @validator("hashtags", pre=True)
     def normalize_hashtags_field(cls, v):
