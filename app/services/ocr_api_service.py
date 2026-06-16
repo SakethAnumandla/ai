@@ -449,13 +449,21 @@ class OcrApiService:
             skipped_duplicates=summary.get("skipped_duplicates", []),
         )
 
-    def list_bills(self, user_id: int) -> List[OCRBillResponse]:
-        return self.db.query(OCRBill).filter(OCRBill.user_id == user_id).all()
+    def list_bills(self, user_id: int, company_id: int = 1) -> List[OCRBillResponse]:
+        return (
+            self.db.query(OCRBill)
+            .filter(OCRBill.user_id == user_id, OCRBill.company_id == company_id)
+            .all()
+        )
 
-    def get_bill(self, user_id: int, bill_id: int) -> OCRBill:
+    def get_bill(self, user_id: int, bill_id: int, company_id: int = 1) -> OCRBill:
         bill = (
             self.db.query(OCRBill)
-            .filter(OCRBill.id == bill_id, OCRBill.user_id == user_id)
+            .filter(
+                OCRBill.id == bill_id,
+                OCRBill.user_id == user_id,
+                OCRBill.company_id == company_id,
+            )
             .first()
         )
         if not bill:
@@ -463,9 +471,9 @@ class OcrApiService:
         return bill
 
     def bill_file_stream(
-        self, user_id: int, bill_id: int, *, download: bool
+        self, user_id: int, bill_id: int, *, download: bool, company_id: int = 1
     ) -> Tuple[BytesIO, str, dict]:
-        bill = self.get_bill(user_id, bill_id)
+        bill = self.get_bill(user_id, bill_id, company_id=company_id)
         if not bill.original_file_data:
             raise HTTPException(status_code=404, detail="File not found")
         mime = bill.original_mime_type or "application/octet-stream"

@@ -369,11 +369,12 @@ def create_manual_upload_draft(
     file_info: dict,
     batch_id: Optional[int],
     bill_index: int,
+    company_id: int = 1,
 ) -> Tuple[Expense, dict, bool]:
     """Draft from file only (no OCR)."""
     file_hash = file_info.get("file_hash")
     if file_hash:
-        existing = find_expense_by_file_hash(db, user_id, file_hash)
+        existing = find_expense_by_file_hash(db, user_id, file_hash, company_id)
         if existing:
             prefill = {
                 "bill_name": existing.bill_name,
@@ -413,6 +414,7 @@ def create_manual_upload_draft(
 
     expense = Expense(
         user_id=user_id,
+        company_id=company_id,
         bill_name=prefill["bill_name"],
         bill_amount=prefill["bill_amount"],
         bill_date=prefill["bill_date"],
@@ -431,6 +433,7 @@ def create_manual_upload_draft(
     attach_files_to_expense(db, expense, [file_info])
     ocr_bill = OCRBill(
         user_id=user_id,
+        company_id=company_id,
         batch_id=batch_id,
         expense_id=expense.id,
         original_file_data=file_info["file_data"],
@@ -451,6 +454,7 @@ def create_ocr_draft(
     batch_id: Optional[int],
     bill_index: int,
     force_rescan: bool = False,
+    company_id: int = 1,
 ) -> Tuple[Optional[Expense], dict, bool, Optional[str]]:
     """
     Run LLM vision scan, store data on OCRBill, create DRAFT expense with main fields.
@@ -459,7 +463,7 @@ def create_ocr_draft(
     file_hash = file_info.get("file_hash")
     refresh_expense: Optional[Expense] = None
     if file_hash:
-        existing = find_expense_by_file_hash(db, user_id, file_hash)
+        existing = find_expense_by_file_hash(db, user_id, file_hash, company_id)
         if existing:
             if (
                 existing.status == ExpenseStatus.REJECTED
@@ -501,6 +505,7 @@ def create_ocr_draft(
             batch_id,
             bill_index,
             refresh_expense,
+            company_id=company_id,
         )
     except OcrScanUnreadable:
         raise
@@ -516,6 +521,7 @@ def _create_ocr_draft_from_extracted(
     batch_id: Optional[int],
     bill_index: int,
     refresh_expense: Optional[Expense],
+    company_id: int = 1,
 ) -> Tuple[Optional[Expense], dict, bool, Optional[str]]:
     transaction_type, main_category, sub_category = resolve_classification(
         extracted, extracted.get("raw_text")
@@ -584,6 +590,7 @@ def _create_ocr_draft_from_extracted(
 
     expense = Expense(
         user_id=user_id,
+        company_id=company_id,
         bill_name=prefill["bill_name"],
         bill_amount=prefill["bill_amount"],
         bill_date=prefill["bill_date"],
@@ -666,9 +673,11 @@ def process_multi_file_drafts(
     use_ocr: bool,
     force_rescan: bool = False,
     batch_name: Optional[str] = None,
+    company_id: int = 1,
 ) -> Dict[str, Any]:
     batch = OCRBatch(
         user_id=user_id,
+        company_id=company_id,
         total_files=len(file_infos),
         processed_files=0,
         status="processing",

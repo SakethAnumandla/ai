@@ -300,6 +300,7 @@ class AIOrchestrator:
                     )
                 ):
                         from app.ai.utils.date_range_parser import parse_date_range
+                        from app.ai.security import scoped_company_id
 
                         manage = ExpenseManageWorkflow(self._db)
                         date_hint = message if parse_date_range(message) else None
@@ -307,11 +308,15 @@ class AIOrchestrator:
                             manage_action,
                             session_id=ctx.session_id,
                             user_id=user.id,
+                            company_id=scoped_company_id(ctx, user),
                             initial_text=date_hint,
                         )
                         if start_result.handled:
                             if start_result.updated_state:
                                 start_result.updated_state.slots["user_id"] = user.id
+                                start_result.updated_state.slots["company_id"] = (
+                                    scoped_company_id(ctx, user)
+                                )
                                 start_result.updated_state.session_id = ctx.session_id
                                 await self._memory.set_workflow_state(
                                     ctx, start_result.updated_state
@@ -726,7 +731,14 @@ class AIOrchestrator:
     ) -> Optional[Dict[str, Any]]:
         from app.ai.resolution.reference_resolver import ReferenceResolver
 
-        prefill = ReferenceResolver(self._db).resolve(user.id, user_content).apply_to_slots({})
+        from app.ai.security import scoped_company_id
+
+        company_id = scoped_company_id(ctx, user)
+        prefill = (
+            ReferenceResolver(self._db)
+            .resolve(user.id, user_content, company_id=company_id)
+            .apply_to_slots({})
+        )
         result = await self._workflow.continue_workflow(
             ctx, user_content, prefill=prefill, user=user
         )
@@ -1338,10 +1350,17 @@ class AIOrchestrator:
         tu = TenantUserContext(tenant_id=ctx.tenant_id, user_id=ctx.user_id)
         data = result.data or {}
         expense_id = data.get("expense_id")
+        from app.ai.security import scoped_company_id
+
+        company_id = scoped_company_id(ctx, user)
         if tool_name == "expense.create.v1" and expense_id:
             expense = (
                 self._db.query(Expense)
-                .filter(Expense.id == expense_id, Expense.user_id == user.id)
+                .filter(
+                    Expense.id == expense_id,
+                    Expense.user_id == user.id,
+                    Expense.company_id == company_id,
+                )
                 .first()
             )
             if expense:
@@ -1363,7 +1382,11 @@ class AIOrchestrator:
         elif tool_name == "expense.submit.v1" and expense_id:
             expense = (
                 self._db.query(Expense)
-                .filter(Expense.id == expense_id, Expense.user_id == user.id)
+                .filter(
+                    Expense.id == expense_id,
+                    Expense.user_id == user.id,
+                    Expense.company_id == company_id,
+                )
                 .first()
             )
             if expense:

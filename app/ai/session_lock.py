@@ -12,7 +12,7 @@ class SessionLockManager:
         self._meta = asyncio.Lock()
 
     def _key(self, ctx: SessionContext) -> str:
-        return f"{ctx.tenant_id}:{ctx.user_id}:{ctx.session_id}"
+        return f"{ctx.scoped_company_id}:{ctx.user_id}:{ctx.session_id}"
 
     async def _get_local_lock(self, key: str) -> asyncio.Lock:
         async with self._meta:

@@ -47,7 +47,11 @@ class MemoryAnomalyDetector:
         since = now - timedelta(days=lookback_days)
         expenses = (
             self._db.query(Expense)
-            .filter(Expense.user_id == ctx.user_id, Expense.created_at >= since)
+            .filter(
+                Expense.user_id == ctx.user_id,
+                Expense.company_id == ctx.scoped_company_id,
+                Expense.created_at >= since,
+            )
             .order_by(Expense.created_at.desc())
             .limit(200)
             .all()

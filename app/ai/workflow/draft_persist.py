@@ -21,6 +21,10 @@ from app.utils.expense_business_fields import apply_business_fields
 from app.utils.expense_helpers import parse_payment_method
 
 
+def _company_id(user: User) -> int:
+    return int(getattr(user, "company_id", None) or 1)
+
+
 def _build_tool_args(slots: Dict[str, Any]) -> Dict[str, Any]:
     args = dict(slots)
     for internal in (
@@ -93,6 +97,7 @@ def persist_workflow_draft(
 
     svc = ExpenseService(db)
     expense_id = state.expense_id or state.slots.get("expense_id")
+    company_id = _company_id(user)
 
     parsed_date = datetime.utcnow()
     if tool_args.get("bill_date"):
@@ -129,8 +134,13 @@ def persist_workflow_draft(
         if tool_args.get("hashtags"):
             update_fields["hashtags"] = tool_args["hashtags"]
         if update_fields:
-            svc.update_expense(int(expense_id), user.id, ExpenseUpdate(**update_fields))
-        expense = svc.get_expense(int(expense_id), user.id)
+            svc.update_expense(
+                int(expense_id),
+                user.id,
+                ExpenseUpdate(**update_fields),
+                company_id=company_id,
+            )
+        expense = svc.get_expense(int(expense_id), user.id, company_id)
         if expense and tool_args.get("tax_amount") and float(tool_args["tax_amount"]) > 0:
             TaxService(db).import_from_ocr_breakdown(
                 expense, None, total_tax=float(tool_args["tax_amount"])
@@ -166,7 +176,12 @@ def persist_workflow_draft(
     }
     expense_data = ExpenseCreate(**{k: v for k, v in expense_payload.items() if v is not None})
     expense = svc.create_expense(
-        db, expense_data, user.id, UploadMethod.MANUAL, status=ExpenseStatus.DRAFT
+        db,
+        expense_data,
+        user.id,
+        UploadMethod.MANUAL,
+        status=ExpenseStatus.DRAFT,
+        company_id=company_id,
     )
     apply_business_fields(
         expense,

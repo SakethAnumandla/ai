@@ -65,7 +65,7 @@ async def get_default_user(db: Session = Depends(get_db)) -> User:
             db.refresh(user)
         wallet = db.query(Wallet).filter(Wallet.user_id == user.id).first()
         if not wallet:
-            db.add(Wallet(user_id=user.id))
+            db.add(Wallet(user_id=user.id, company_id=1))
             db.commit()
         return user
 
@@ -81,7 +81,7 @@ async def get_default_user(db: Session = Depends(get_db)) -> User:
     )
     db.add(user)
     db.flush()
-    db.add(Wallet(user_id=user.id))
+    db.add(Wallet(user_id=user.id, company_id=1))
     db.commit()
     db.refresh(user)
     return user

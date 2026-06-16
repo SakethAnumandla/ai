@@ -3,8 +3,8 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.dependencies import TimePeriodFilter, get_default_user
-from app.models import User
+from app.dependencies import TimePeriodFilter
+from app.deps.scope import ExpenseScope, ScopedActor, get_expense_scope
 from app.schemas import WalletResponse
 from app.services.budget_service import monthly_budget_utilisation
 from app.services.wallet_read_service import WalletReadService
@@ -29,10 +29,10 @@ def _wallet_to_response(wallet) -> WalletResponse:
 @router.get("/balance", response_model=WalletResponse)
 async def get_wallet_balance(
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_default_user),
+    scope: ExpenseScope = Depends(get_expense_scope),
 ):
     """Current wallet balance (all-time ledger; not filtered by period)."""
-    wallet = WalletService(db).get_or_create_wallet(current_user.id)
+    wallet = WalletService(db).get_or_create_wallet_for_scope(scope)
     return _wallet_to_response(wallet)
 
 
@@ -42,14 +42,15 @@ async def get_transactions(
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=500),
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_default_user),
+    scope: ExpenseScope = Depends(get_expense_scope),
 ):
     """Wallet transaction history within the selected time period."""
+    actor = ScopedActor.from_scope(scope)
     return WalletReadService(db).transactions_page(
         time_period=time_period,
         skip=skip,
         limit=limit,
-        current_user=current_user,
+        current_user=actor,
         date_range=date_range_info(time_period),
     )
 
@@ -58,16 +59,17 @@ async def get_transactions(
 async def get_wallet_summary(
     time_period: TimePeriodFilter = Depends(),
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_default_user),
+    scope: ExpenseScope = Depends(get_expense_scope),
 ):
     """
     Wallet summary for the selected period.
 
     `current_balance` is the live all-time balance; income/expense/net are for the period only.
     """
+    actor = ScopedActor.from_scope(scope)
     return WalletReadService(db).period_summary(
         time_period=time_period,
-        current_user=current_user,
+        current_user=actor,
         date_range=date_range_info(time_period),
     )
 
@@ -75,19 +77,19 @@ async def get_wallet_summary(
 @router.get("/budget-utilisation")
 async def get_budget_utilisation(
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_default_user),
+    scope: ExpenseScope = Depends(get_expense_scope),
 ):
     """Monthly approved spend vs €1M budget; prior-month compare hidden in April (FY start)."""
-    return monthly_budget_utilisation(db, current_user.id)
+    return monthly_budget_utilisation(db, scope.user_id, company_id=scope.company_id)
 
 
 @router.get("/summary/legacy")
 async def get_wallet_summary_legacy(
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_default_user),
+    scope: ExpenseScope = Depends(get_expense_scope),
 ):
     """All-time wallet totals (legacy shape for older clients)."""
-    wallet = WalletService(db).get_or_create_wallet(current_user.id)
+    wallet = WalletService(db).get_or_create_wallet_for_scope(scope)
     return {
         "current_balance": wallet.balance,
         "total_income": wallet.total_income,

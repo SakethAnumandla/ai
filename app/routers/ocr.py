@@ -7,8 +7,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.dependencies import get_current_user
-from app.models import User
+from app.deps.scope import ExpenseScope, ScopedActor, get_expense_scope
 from app.schemas import (
     BatchUploadResponse,
     ExpenseResponse,
@@ -22,15 +21,19 @@ from app.services.ocr_batch_service import process_ocr_batch
 router = APIRouter(prefix="/ocr", tags=["ocr"])
 
 
+def _actor(scope: ExpenseScope) -> ScopedActor:
+    return ScopedActor.from_scope(scope)
+
+
 @router.post("/scan-drafts", response_model=MultiBillDraftResponse)
 async def scan_multiple_as_drafts(
     files: List[UploadFile] = File(...),
     force_rescan: bool = Query(False),
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    scope: ExpenseScope = Depends(get_expense_scope),
 ):
     return await OcrApiService(db).scan_drafts(
-        current_user, files, force_rescan=force_rescan
+        _actor(scope), files, force_rescan=force_rescan
     )
 
 
@@ -38,9 +41,9 @@ async def scan_multiple_as_drafts(
 async def get_batch_drafts(
     batch_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    scope: ExpenseScope = Depends(get_expense_scope),
 ):
-    return OcrApiService(db).reload_batch_drafts(current_user, batch_id)
+    return OcrApiService(db).reload_batch_drafts(_actor(scope), batch_id)
 
 
 @router.post("/scan", response_model=ExpenseResponse)
@@ -50,10 +53,11 @@ async def scan_single_bill(
     auto_approve: bool = False,
     force_rescan: bool = Query(False),
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    scope: ExpenseScope = Depends(get_expense_scope),
 ):
+    actor = _actor(scope)
     return await OcrApiService(db).scan_single(
-        current_user,
+        actor,
         file,
         as_draft=as_draft,
         auto_approve=auto_approve,
@@ -69,10 +73,11 @@ async def scan_multiple_bills(
     auto_approve: bool = False,
     force_rescan: bool = Query(False),
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    scope: ExpenseScope = Depends(get_expense_scope),
 ):
+    actor = _actor(scope)
     result = await OcrApiService(db).scan_batch(
-        current_user,
+        actor,
         files,
         as_draft=as_draft,
         auto_approve=auto_approve,
@@ -85,7 +90,7 @@ async def scan_multiple_bills(
         process_ocr_batch,
         batch.id,
         file_payloads,
-        current_user.id,
+        actor.user_id,
         auto_approve,
         force_rescan,
     )
@@ -96,26 +101,28 @@ async def scan_multiple_bills(
 async def get_batch_status(
     batch_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    scope: ExpenseScope = Depends(get_expense_scope),
 ):
-    return OcrApiService(db).batch_status(current_user, batch_id)
+    return OcrApiService(db).batch_status(_actor(scope), batch_id)
 
 
 @router.get("/bills", response_model=List[OCRBillResponse])
 async def get_ocr_bills(
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    scope: ExpenseScope = Depends(get_expense_scope),
 ):
-    return OcrApiService(db).list_bills(current_user.id)
+    return OcrApiService(db).list_bills(scope.user_id, company_id=scope.company_id)
 
 
 @router.get("/bills/{bill_id}", response_model=OCRBillResponse)
 async def get_ocr_bill(
     bill_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    scope: ExpenseScope = Depends(get_expense_scope),
 ):
-    return OcrApiService(db).get_bill(current_user.id, bill_id)
+    return OcrApiService(db).get_bill(
+        scope.user_id, bill_id, company_id=scope.company_id
+    )
 
 
 @router.get("/bills/{bill_id}/file")
@@ -123,10 +130,10 @@ async def preview_ocr_bill_file(
     bill_id: int,
     download: bool = Query(False),
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    scope: ExpenseScope = Depends(get_expense_scope),
 ):
     body, mime, headers = OcrApiService(db).bill_file_stream(
-        current_user.id, bill_id, download=download
+        scope.user_id, bill_id, download=download, company_id=scope.company_id
     )
     return StreamingResponse(body, media_type=mime, headers=headers)
 
@@ -135,9 +142,9 @@ async def preview_ocr_bill_file(
 async def preview_ocr_bill_alias(
     bill_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    scope: ExpenseScope = Depends(get_expense_scope),
 ):
     body, mime, headers = OcrApiService(db).bill_file_stream(
-        current_user.id, bill_id, download=False
+        scope.user_id, bill_id, download=False, company_id=scope.company_id
     )
     return StreamingResponse(body, media_type=mime, headers=headers)

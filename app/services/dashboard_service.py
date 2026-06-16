@@ -28,18 +28,27 @@ class DashboardService:
     def __init__(self, db: Session):
         self.db = db
 
-    def wallet_balance(self, user_id: int) -> float:
-        wallet = self.db.query(Wallet).filter(Wallet.user_id == user_id).first()
+    def wallet_balance(self, user_id: int, company_id: int = 1) -> float:
+        wallet = (
+            self.db.query(Wallet)
+            .filter(Wallet.user_id == user_id, Wallet.company_id == company_id)
+            .first()
+        )
         return wallet.balance if wallet else 0.0
+
+    def _company_id(self, user: User) -> int:
+        return int(getattr(user, "company_id", 1) or 1)
 
     def get_stats(
         self, user: User, resolved: ResolvedTimePeriod, date_range: DateRangeInfo
     ) -> DashboardStatsResponse:
+        company_id = self._company_id(user)
         stats = compute_dashboard_stats(
             self.db,
             user,
             resolved,
-            wallet_balance=self.wallet_balance(user.id),
+            wallet_balance=self.wallet_balance(user.id, company_id),
+            company_id=company_id,
         )
         return DashboardStatsResponse(date_range=date_range, stats=stats)
 
@@ -53,21 +62,23 @@ class DashboardService:
         recent_limit: int,
         top_limit: int,
     ) -> DashboardOverviewResponse:
-        balance = self.wallet_balance(user.id)
+        company_id = self._company_id(user)
+        balance = self.wallet_balance(user.id, company_id)
         stats = compute_dashboard_stats(
-            self.db, user, resolved, wallet_balance=balance
+            self.db, user, resolved, wallet_balance=balance, company_id=company_id
         )
         breakdown = compute_category_breakdown(
-            self.db, user.id, resolved, txn_type
+            self.db, user.id, resolved, txn_type, company_id=company_id
         )
         recent = recent_transactions_list(
-            self.db, user.id, resolved, limit=recent_limit
+            self.db, user.id, resolved, limit=recent_limit, company_id=company_id
         )
         top = self.top_categories(
             user_id=user.id,
             resolved=resolved,
             txn_type=txn_type,
             limit=top_limit,
+            company_id=company_id,
         )
         return DashboardOverviewResponse(
             date_range=date_range,
@@ -78,15 +89,22 @@ class DashboardService:
         )
 
     def category_breakdown(
-        self, user_id: int, resolved: ResolvedTimePeriod, txn_type: TransactionType
+        self,
+        user_id: int,
+        resolved: ResolvedTimePeriod,
+        txn_type: TransactionType,
+        company_id: int = 1,
     ) -> List[CategoryWiseExpense]:
-        return compute_category_breakdown(self.db, user_id, resolved, txn_type)
+        return compute_category_breakdown(
+            self.db, user_id, resolved, txn_type, company_id=company_id
+        )
 
     def monthly_trend(
         self,
         user_id: int,
         resolved: ResolvedTimePeriod,
         months: Optional[int],
+        company_id: int = 1,
     ) -> List[MonthlySummary]:
         if resolved.is_all_time and months:
             end_date = datetime.utcnow()
@@ -107,6 +125,7 @@ class DashboardService:
             )
             .filter(
                 Expense.user_id == user_id,
+                Expense.company_id == company_id,
                 Expense.status == ExpenseStatus.APPROVED,
             )
         )
@@ -144,6 +163,7 @@ class DashboardService:
         resolved: ResolvedTimePeriod,
         txn_type: TransactionType,
         limit: int,
+        company_id: int = 1,
     ) -> List[Dict[str, Any]]:
         q = (
             self.db.query(
@@ -153,6 +173,7 @@ class DashboardService:
             )
             .filter(
                 Expense.user_id == user_id,
+                Expense.company_id == company_id,
                 Expense.status == ExpenseStatus.APPROVED,
                 Expense.transaction_type == txn_type,
             )
@@ -175,7 +196,7 @@ class DashboardService:
         ]
 
     def daily_spending(
-        self, user_id: int, resolved: ResolvedTimePeriod
+        self, user_id: int, resolved: ResolvedTimePeriod, company_id: int = 1
     ) -> List[Dict[str, Any]]:
         q = (
             self.db.query(
@@ -184,6 +205,7 @@ class DashboardService:
             )
             .filter(
                 Expense.user_id == user_id,
+                Expense.company_id == company_id,
                 Expense.status == ExpenseStatus.APPROVED,
                 Expense.transaction_type == TransactionType.EXPENSE,
             )
@@ -195,11 +217,14 @@ class DashboardService:
             for data in daily_data
         ]
 
-    def pending_approvals_summary(self, user_id: int) -> Dict[str, Any]:
+    def pending_approvals_summary(
+        self, user_id: int, company_id: int = 1
+    ) -> Dict[str, Any]:
         pending = (
             self.db.query(Expense)
             .filter(
                 Expense.user_id == user_id,
+                Expense.company_id == company_id,
                 Expense.status.in_([ExpenseStatus.SUBMITTED, ExpenseStatus.PENDING]),
             )
             .all()
@@ -218,10 +243,15 @@ class DashboardService:
         }
 
     def ocr_statistics(
-        self, user_id: int, resolved: ResolvedTimePeriod, date_range_meta: dict
+        self,
+        user_id: int,
+        resolved: ResolvedTimePeriod,
+        date_range_meta: dict,
+        company_id: int = 1,
     ) -> Dict[str, Any]:
         q = self.db.query(Expense).filter(
             Expense.user_id == user_id,
+            Expense.company_id == company_id,
             Expense.upload_method == "ocr",
         )
         q = apply_bill_date_filter(q, Expense, resolved)
@@ -243,7 +273,7 @@ class DashboardService:
         )
         avg_confidence = (
             self.db.query(func.avg(OCRBill.confidence_score))
-            .filter(OCRBill.user_id == user_id)
+            .filter(OCRBill.user_id == user_id, OCRBill.company_id == company_id)
             .scalar()
         )
         return {
@@ -267,6 +297,7 @@ class DashboardService:
         end_date: datetime,
         date_range_meta: dict,
         period_label: str,
+        company_id: int = 1,
     ) -> Dict[str, Any]:
         if month:
             year, month_num = map(int, month.split("-"))
@@ -283,6 +314,7 @@ class DashboardService:
             )
             .filter(
                 Expense.user_id == user_id,
+                Expense.company_id == company_id,
                 Expense.status == ExpenseStatus.APPROVED,
                 Expense.transaction_type == TransactionType.EXPENSE,
             )
@@ -306,11 +338,16 @@ class DashboardService:
         }
 
     def quick_insights(
-        self, user_id: int, resolved: ResolvedTimePeriod, date_range_meta: dict
+        self,
+        user_id: int,
+        resolved: ResolvedTimePeriod,
+        date_range_meta: dict,
+        company_id: int = 1,
     ) -> Dict[str, Any]:
         expenses = apply_bill_date_filter(
             self.db.query(Expense).filter(
                 Expense.user_id == user_id,
+                Expense.company_id == company_id,
                 Expense.status == ExpenseStatus.APPROVED,
                 Expense.transaction_type == TransactionType.EXPENSE,
             ),

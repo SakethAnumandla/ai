@@ -35,7 +35,9 @@ class WalletReadService:
         current_user: User,
         date_range: DateRangeInfo,
     ) -> WalletTransactionsPage:
-        wallet = WalletService(self.db).get_or_create_wallet(current_user.id)
+        wallet = WalletService(self.db).get_or_create_wallet(
+            current_user.id, getattr(current_user, "company_id", 1)
+        )
         base = (
             self.db.query(WalletTransaction)
             .join(Expense, Expense.id == WalletTransaction.expense_id)
@@ -64,7 +66,9 @@ class WalletReadService:
         current_user: User,
         date_range: DateRangeInfo,
     ) -> WalletPeriodSummary:
-        wallet = WalletService(self.db).get_or_create_wallet(current_user.id)
+        wallet = WalletService(self.db).get_or_create_wallet(
+            current_user.id, getattr(current_user, "company_id", 1)
+        )
         q = (
             self.db.query(WalletTransaction)
             .join(Expense, Expense.id == WalletTransaction.expense_id)

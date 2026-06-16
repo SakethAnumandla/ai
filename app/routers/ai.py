@@ -27,12 +27,12 @@ from app.ai.schemas.memory import PendingIntent
 from app.ai.schemas.chat_ui import ChatUIAction, ExpensePreviewCard, CategoryPickerPayload
 from app.ai.models.entities import AIConversation, ConversationRole
 from app.ai.schemas.conversation import ConversationMessageCreate, ConversationMessageOut
-from app.ai.security import build_session_context, resolve_tenant_id
+from app.ai.security import build_session_context_from_scope, assert_chat_session_access
 from app.ai.services.memory_service import MemoryService
 from app.config import settings
 from app.database import get_db
-from app.dependencies import get_current_user
-from app.models import AIChatSession, User
+from app.deps.scope import ExpenseScope, ScopedActor, get_expense_scope
+from app.models import AIChatSession
 from sqlalchemy import desc, func
 from app.utils.file_upload import process_multiple_files
 from app.utils.async_io import run_blocking
@@ -40,6 +40,23 @@ from app.utils.async_io import run_blocking
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/ai", tags=["ai"])
+
+
+def _actor(scope: ExpenseScope) -> ScopedActor:
+    return ScopedActor.from_scope(scope)
+
+
+def _ctx(scope: ExpenseScope, session_id: str):
+    return build_session_context_from_scope(scope, session_id)
+
+
+def _guard_session(db: Session, scope: ExpenseScope, session_id: str) -> None:
+    assert_chat_session_access(
+        db,
+        company_id=scope.company_id,
+        user_id=scope.user_id,
+        session_id=session_id,
+    )
 
 
 def _build_chat_response(
@@ -86,7 +103,7 @@ def _upload_files_from_form(form) -> List[UploadFile]:
 
 @router.get("/chat/categories")
 async def ai_chat_categories(
-    user: User = Depends(get_current_user),
+    scope: ExpenseScope = Depends(get_expense_scope),
 ):
     """Category hierarchy for manual expense chat (same payload as GET /categories/manual)."""
     from app.utils.category_hashtags import get_manual_categories_payload
@@ -102,24 +119,30 @@ async def ai_chat_categories(
 @router.get("/chat/welcome", response_model=ChatResponse)
 async def ai_chat_welcome(
     session_id: str = Query(..., min_length=8, max_length=64),
-    user: User = Depends(get_current_user),
+    scope: ExpenseScope = Depends(get_expense_scope),
+    db: Session = Depends(get_db),
     orchestrator: AIOrchestrator = Depends(get_ai_orchestrator),
 ):
     """Fixed opening message when the user opens a chat session."""
-    ctx = build_session_context(user, session_id)
-    result = await orchestrator.ensure_session_welcome(ctx, user=user)
+    _guard_session(db, scope, session_id)
+    actor = _actor(scope)
+    ctx = _ctx(scope, session_id)
+    result = await orchestrator.ensure_session_welcome(ctx, user=actor)
     return _build_chat_response(result)
 
 
 @router.post("/chat", response_model=ChatResponse)
 async def ai_chat(
     body: ChatRequest,
-    user: User = Depends(get_current_user),
+    scope: ExpenseScope = Depends(get_expense_scope),
+    db: Session = Depends(get_db),
     orchestrator: AIOrchestrator = Depends(get_ai_orchestrator),
 ):
-    ctx = build_session_context(user, body.session_id)
+    _guard_session(db, scope, body.session_id)
+    actor = _actor(scope)
+    ctx = _ctx(scope, body.session_id)
     result = await orchestrator.handle_user_message(
-        ctx, body.message, user=user
+        ctx, body.message, user=actor
     )
     return _build_chat_response(
         result,
@@ -132,7 +155,7 @@ async def ai_chat(
 @router.post("/chat/upload", response_model=ChatResponse)
 async def ai_chat_with_attachments(
     request: Request,
-    user: User = Depends(get_current_user),
+    scope: ExpenseScope = Depends(get_expense_scope),
     db: Session = Depends(get_db),
     orchestrator: AIOrchestrator = Depends(get_ai_orchestrator),
     memory: MemoryService = Depends(get_ai_memory_service),
@@ -150,6 +173,7 @@ async def ai_chat_with_attachments(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="session_id must be between 8 and 64 characters",
         )
+    _guard_session(db, scope, session_id)
     message = str(form.get("message") or "")
     uploads = _upload_files_from_form(form)
     if not uploads:
@@ -158,7 +182,8 @@ async def ai_chat_with_attachments(
             detail="Add at least one file (image or PDF), or use POST /ai/chat with JSON.",
         )
 
-    ctx = build_session_context(user, session_id)
+    actor = _actor(scope)
+    ctx = _ctx(scope, session_id)
     file_infos = await process_multiple_files(uploads)
     if not file_infos:
         raise HTTPException(
@@ -189,7 +214,7 @@ async def ai_chat_with_attachments(
         try:
             updated_state, preview, preview_hint, category_picker, upload_actions = (
                 attach_receipt_to_manual_workflow(
-                    db, user, workflow_state, file_infos
+                    db, actor, workflow_state, file_infos
                 )
             )
         except ValueError as exc:
@@ -236,7 +261,7 @@ async def ai_chat_with_attachments(
     scan = await run_blocking(
         run_chat_receipt_scans,
         db,
-        user,
+        actor,
         file_infos,
         user_message=message,
     )
@@ -277,7 +302,7 @@ async def ai_chat_with_attachments(
     result = await orchestrator.handle_user_message(
         ctx,
         intent_message,
-        user=user,
+        user=actor,
         persist_message=persist_message,
         llm_user_content=llm_user_content,
         skip_active_workflow=skip_workflow,
@@ -312,22 +337,24 @@ async def ai_chat_with_attachments(
 @router.post("/chat/end", status_code=status.HTTP_204_NO_CONTENT)
 async def ai_chat_end(
     session_id: str = Query(..., min_length=8, max_length=64),
-    user: User = Depends(get_current_user),
+    scope: ExpenseScope = Depends(get_expense_scope),
+    db: Session = Depends(get_db),
     orchestrator: AIOrchestrator = Depends(get_ai_orchestrator),
 ):
     """End a chat session — clears workflow/draft session memory for this session_id."""
-    ctx = build_session_context(user, session_id)
-    await orchestrator.end_session(ctx, user=user)
+    _guard_session(db, scope, session_id)
+    await orchestrator.end_session(_ctx(scope, session_id), user=_actor(scope))
 
 
 @router.get("/chat/sessions")
 async def list_chat_sessions(
     limit: int = Query(30, ge=1, le=100),
-    user: User = Depends(get_current_user),
+    scope: ExpenseScope = Depends(get_expense_scope),
     db: Session = Depends(get_db),
 ):
     """List persisted chat sessions for the user (messages in ai_conversations)."""
-    tenant_id = resolve_tenant_id(user)
+    tenant_id = scope.company_id
+    user_id = scope.user_id
     rows = (
         db.query(
             AIConversation.session_id,
@@ -336,7 +363,7 @@ async def list_chat_sessions(
         )
         .filter(
             AIConversation.tenant_id == tenant_id,
-            AIConversation.user_id == user.id,
+            AIConversation.user_id == user_id,
         )
         .group_by(AIConversation.session_id)
         .order_by(desc("last_at"))
@@ -350,7 +377,7 @@ async def list_chat_sessions(
             db.query(AIChatSession)
             .filter(
                 AIChatSession.tenant_id == tenant_id,
-                AIChatSession.user_id == user.id,
+                AIChatSession.user_id == user_id,
                 AIChatSession.session_id.in_(session_ids),
             )
             .all()
@@ -362,28 +389,35 @@ async def list_chat_sessions(
         out.append(
             {
                 "session_id": r.session_id,
+                "company_id": tenant_id,
+                "user_id": user_id,
                 "title": (m.title if m else None) or "Expense chat",
                 "message_count": int(r.msg_count),
                 "last_message_at": r.last_at.isoformat() if r.last_at else None,
                 "is_active": m.is_active if m else True,
             }
         )
-    return {"sessions": out}
+    return {
+        "company_id": tenant_id,
+        "user_id": user_id,
+        "sessions": out,
+    }
 
 
 @router.get("/chat/sessions/{session_id}/messages")
 async def get_chat_session_messages(
     session_id: str,
     limit: int = Query(50, ge=1, le=200),
-    user: User = Depends(get_current_user),
+    scope: ExpenseScope = Depends(get_expense_scope),
     db: Session = Depends(get_db),
 ):
-    tenant_id = resolve_tenant_id(user)
+    _guard_session(db, scope, session_id)
+    tenant_id = scope.company_id
     msgs = (
         db.query(AIConversation)
         .filter(
             AIConversation.tenant_id == tenant_id,
-            AIConversation.user_id == user.id,
+            AIConversation.user_id == scope.user_id,
             AIConversation.session_id == session_id,
         )
         .order_by(AIConversation.created_at)
@@ -392,6 +426,8 @@ async def get_chat_session_messages(
     )
     return {
         "session_id": session_id,
+        "company_id": tenant_id,
+        "user_id": scope.user_id,
         "messages": [
             {
                 "role": m.role,
@@ -406,12 +442,13 @@ async def get_chat_session_messages(
 @router.get("/dead-letter")
 async def list_dead_letter_jobs(
     limit: int = Query(50, ge=1, le=200),
-    user: User = Depends(get_current_user),
+    scope: ExpenseScope = Depends(get_expense_scope),
     dlq: DeadLetterQueueService = Depends(get_dead_letter_service),
 ):
     """Retry visibility for failed approvals, reimbursements, and submits."""
-    tenant_id = resolve_tenant_id(user)
-    rows = dlq.list_failed(tenant_id=tenant_id, user_id=user.id, limit=limit)
+    rows = dlq.list_failed(
+        tenant_id=scope.company_id, user_id=scope.user_id, limit=limit
+    )
     return [
         {
             "id": r.id,

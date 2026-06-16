@@ -22,7 +22,11 @@ class WorkflowSnapshotService:
     ) -> WorkflowSnapshot:
         drafts = (
             self._db.query(Expense)
-            .filter(Expense.user_id == ctx.user_id, Expense.status == ExpenseStatus.DRAFT)
+            .filter(
+                Expense.user_id == ctx.user_id,
+                Expense.company_id == ctx.scoped_company_id,
+                Expense.status == ExpenseStatus.DRAFT,
+            )
             .order_by(Expense.updated_at.desc())
             .limit(5)
             .all()
@@ -31,6 +35,7 @@ class WorkflowSnapshotService:
             self._db.query(Expense)
             .filter(
                 Expense.user_id == ctx.user_id,
+                Expense.company_id == ctx.scoped_company_id,
                 Expense.status.in_(
                     [ExpenseStatus.SUBMITTED, ExpenseStatus.PENDING]
                 ),

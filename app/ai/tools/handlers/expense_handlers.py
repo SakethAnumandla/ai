@@ -36,6 +36,11 @@ from app.services.expense_approval_service import (
 from app.utils.dashboard_queries import expense_status_display
 from app.schemas import ExpenseCreate, ExpenseUpdate
 from app.services.expense_service import ExpenseService
+from app.ai.security import scoped_company_id
+
+
+def _cid(user: User, ctx: SessionContext) -> int:
+    return scoped_company_id(ctx, user)
 def _money_label(amount: float, currency: Optional[str] = None) -> str:
     if amount == int(amount):
         return f"{int(amount):,}"
@@ -101,6 +106,7 @@ async def handle_expense_create_v1(
         return await _confirm_existing_draft(
             db=db,
             user=user,
+            ctx=ctx,
             expense_id=int(expense_id),
             bill_name=bill_name,
             bill_amount=bill_amount,
@@ -167,7 +173,12 @@ async def handle_expense_create_v1(
     status = ExpenseStatus.DRAFT if save_as_draft else ExpenseStatus.SUBMITTED
     try:
         expense = ExpenseService.create_expense(
-            db, expense_data, user.id, UploadMethod.MANUAL, status=status
+            db,
+            expense_data,
+            user.id,
+            UploadMethod.MANUAL,
+            status=status,
+            company_id=_cid(user, ctx),
         )
     except ValidationError:
         if parsed_main.value == "food":
@@ -196,6 +207,7 @@ async def _confirm_existing_draft(
     *,
     db: Session,
     user: User,
+    ctx: SessionContext,
     expense_id: int,
     bill_name: str,
     bill_amount: Optional[float],
@@ -209,8 +221,9 @@ async def _confirm_existing_draft(
     review_token: Optional[str],
     save_as_draft: bool,
 ) -> ToolResult:
+    company_id = _cid(user, ctx)
     svc = ExpenseService(db)
-    expense = svc.get_expense(expense_id, user.id)
+    expense = svc.get_expense(expense_id, user.id, company_id)
     if not expense:
         return ToolResult.fail("Expense not found", error="not_found")
     if expense.status not in (
@@ -251,7 +264,11 @@ async def _confirm_existing_draft(
     ):
         bill = (
             db.query(OCRBill)
-            .filter(OCRBill.expense_id == expense_id, OCRBill.user_id == user.id)
+            .filter(
+                OCRBill.expense_id == expense_id,
+                OCRBill.user_id == user.id,
+                OCRBill.company_id == company_id,
+            )
             .first()
         )
         if bill:
@@ -287,7 +304,7 @@ async def _confirm_existing_draft(
     if update_fields:
         try:
             expense = svc.update_expense(
-                expense_id, user.id, ExpenseUpdate(**update_fields)
+                expense_id, user.id, ExpenseUpdate(**update_fields), company_id=company_id
             )
         except ValidationError:
             return ToolResult.fail(
@@ -301,7 +318,7 @@ async def _confirm_existing_draft(
         ExpenseStatus.PENDING,
         ExpenseStatus.REJECTED,
     ):
-        expense = svc.submit_for_approval(expense_id, user.id)
+        expense = svc.submit_for_approval(expense_id, user.id, company_id)
 
     status_note = (
         " and submitted for approval"
@@ -330,8 +347,9 @@ async def handle_expense_submit_v1(
     idempotency_key: str,
     **_,
 ) -> ToolResult:
+    company_id = _cid(user, ctx)
     svc = ExpenseService(db)
-    expense = svc.get_expense(expense_id, user.id)
+    expense = svc.get_expense(expense_id, user.id, company_id)
     if not expense:
         return ToolResult.fail("Expense not found", error="not_found")
     if expense.status not in (
@@ -352,7 +370,7 @@ async def handle_expense_submit_v1(
             ),
             data={"expense_id": expense.id, "status": expense.status.value},
         )
-    updated = svc.submit_for_approval(expense_id, user.id)
+    updated = svc.submit_for_approval(expense_id, user.id, company_id)
     return ToolResult.ok(
         message=f"Expense #{updated.id} ({updated.bill_name}, ₹{updated.bill_amount:,.2f}) submitted for approval.",
         data={"expense_id": updated.id, "status": updated.status.value},
@@ -399,6 +417,7 @@ async def handle_expense_search_v1(
         start_date=parsed_start,
         end_date=parsed_end,
         limit=effective_limit,
+        company_id=_cid(user, ctx),
     )
     items = [
         {
@@ -433,8 +452,9 @@ async def handle_expense_update_v1(
     description: Optional[str] = None,
     **_,
 ) -> ToolResult:
+    company_id = _cid(user, ctx)
     svc = ExpenseService(db)
-    expense = svc.get_expense(expense_id, user.id)
+    expense = svc.get_expense(expense_id, user.id, company_id)
     if not expense:
         return ToolResult.fail("Expense not found", error="not_found")
 
@@ -473,7 +493,9 @@ async def handle_expense_update_v1(
         )
 
     try:
-        updated = svc.update_expense(expense_id, user.id, ExpenseUpdate(**update_fields))
+        updated = svc.update_expense(
+            expense_id, user.id, ExpenseUpdate(**update_fields), company_id=company_id
+        )
     except ValidationError:
         return ToolResult.fail(
             food_sub_category_prompt(),
@@ -497,8 +519,9 @@ async def handle_expense_delete_v1(
     expense_id: int,
     **_,
 ) -> ToolResult:
+    company_id = _cid(user, ctx)
     svc = ExpenseService(db)
-    expense = svc.get_expense(expense_id, user.id)
+    expense = svc.get_expense(expense_id, user.id, company_id)
     if not expense:
         return ToolResult.fail("Expense not found", error="not_found")
     if expense.status == ExpenseStatus.APPROVED:
@@ -507,18 +530,24 @@ async def handle_expense_delete_v1(
             error="invalid_status",
         )
     label = expense.vendor_name or expense.bill_name
-    svc.delete_expense(expense_id, user.id)
+    svc.delete_expense(expense_id, user.id, company_id=company_id)
     return ToolResult.ok(
         message=f"Deleted expense #{expense_id} ({label}, {_money_label(expense.bill_amount)}).",
         data={"expense_id": expense_id},
     )
 
 
-def _load_expense_for_user(db: Session, user: User, expense_id: int) -> Optional[Expense]:
+def _load_expense_for_user(
+    db: Session, user: User, expense_id: int, *, company_id: int
+) -> Optional[Expense]:
     expense = (
         db.query(Expense)
         .options(joinedload(Expense.approval_steps))
-        .filter(Expense.id == expense_id)
+        .filter(
+            Expense.id == expense_id,
+            Expense.user_id == user.id,
+            Expense.company_id == company_id,
+        )
         .first()
     )
     if not expense:
@@ -566,7 +595,7 @@ async def handle_expense_get_v1(
     expense_id: int,
     **_,
 ) -> ToolResult:
-    expense = _load_expense_for_user(db, user, expense_id)
+    expense = _load_expense_for_user(db, user, expense_id, company_id=_cid(user, ctx))
     if not expense:
         return ToolResult.fail("Expense not found", error="not_found")
     payload = _expense_status_payload(expense)
@@ -586,12 +615,17 @@ async def handle_expense_approval_pending_v1(
     ctx: SessionContext,
     **_,
 ) -> ToolResult:
-    steps = list_pending_for_user(db, user.id)
+    company_id = _cid(user, ctx)
+    steps = list_pending_for_user(db, user.id, company_id=company_id)
     if not steps:
         steps = (
             db.query(ExpenseApproval)
             .options(joinedload(ExpenseApproval.expense))
-            .filter(ExpenseApproval.status == ApprovalStatus.PENDING)
+            .join(Expense, Expense.id == ExpenseApproval.expense_id)
+            .filter(
+                ExpenseApproval.status == ApprovalStatus.PENDING,
+                Expense.company_id == company_id,
+            )
             .order_by(ExpenseApproval.created_at.desc())
             .limit(50)
             .all()

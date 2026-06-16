@@ -58,8 +58,9 @@ class ReceiptIntelligencePipeline:
         bill_index: int = 0,
         force_rescan: bool = False,
     ) -> ReceiptPipelineResult:
-        tenant_id = resolve_tenant_id(user)
-        ctx = TenantUserContext(tenant_id=tenant_id, user_id=user.id)
+        tenant_id = int(getattr(user, "company_id", None) or resolve_tenant_id(user))
+        company_id = tenant_id
+        ctx = TenantUserContext(tenant_id=tenant_id, user_id=user.id, company_id=company_id)
 
         ext = file_info.get("file_extension") or "jpg"
         ocr_meta: dict = {}
@@ -75,15 +76,16 @@ class ReceiptIntelligencePipeline:
                 batch_id=None,
                 bill_index=bill_index,
                 force_rescan=force_rescan,
+                company_id=company_id,
             )
         except OcrScanUnreadable:
             expense, prefill, is_dup = create_manual_upload_draft(
-                self._db, user.id, file_info, None, bill_index or 1
+                self._db, user.id, file_info, None, bill_index or 1, company_id=company_id
             )
             err = None
         if err or not expense:
             expense, prefill, is_dup = create_manual_upload_draft(
-                self._db, user.id, file_info, None, bill_index or 1
+                self._db, user.id, file_info, None, bill_index or 1, company_id=company_id
             )
         if not expense:
             raise RuntimeError("Failed to create expense draft")

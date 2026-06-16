@@ -130,12 +130,16 @@ def build_workflow_preview_card(
     slots: dict,
 ) -> Optional[ExpensePreviewCard]:
     """Preview card for manual chatbot workflow after draft is persisted."""
-    expense = (
+    q = (
         db.query(Expense)
         .options(joinedload(Expense.files))
         .filter(Expense.id == expense_id)
-        .first()
     )
+    if slots.get("user_id") is not None:
+        q = q.filter(Expense.user_id == int(slots["user_id"]))
+    if slots.get("company_id") is not None:
+        q = q.filter(Expense.company_id == int(slots["company_id"]))
+    expense = q.first()
     if not expense:
         return None
 

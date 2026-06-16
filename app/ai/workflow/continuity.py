@@ -29,11 +29,12 @@ class WorkflowContinuityService:
     def is_continue_intent(self, text: str) -> bool:
         return bool(_CONTINUE_RE.search(text.strip()))
 
-    def _latest_db_draft(self, user_id: int) -> Optional[Expense]:
+    def _latest_db_draft(self, user_id: int, company_id: int) -> Optional[Expense]:
         return (
             self._db.query(Expense)
             .filter(
                 Expense.user_id == user_id,
+                Expense.company_id == company_id,
                 Expense.status.in_((ExpenseStatus.DRAFT, ExpenseStatus.REJECTED)),
             )
             .order_by(Expense.updated_at.desc(), Expense.created_at.desc())
@@ -71,7 +72,7 @@ class WorkflowContinuityService:
 
         tu = TenantUserContext(tenant_id=ctx.tenant_id, user_id=ctx.user_id)
         pg_draft = await self._memory.get_draft_expense(ctx)
-        db_draft = self._latest_db_draft(ctx.user_id)
+        db_draft = self._latest_db_draft(ctx.user_id, ctx.scoped_company_id)
 
         draft_ctx: Optional[DraftExpenseContext] = pg_draft
         if db_draft and (not draft_ctx or not draft_ctx.expense_id):

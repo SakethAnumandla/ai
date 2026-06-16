@@ -40,7 +40,11 @@ def attach_receipt_to_manual_workflow(
 
     expense = (
         db.query(Expense)
-        .filter(Expense.id == expense_id, Expense.user_id == user.id)
+        .filter(
+            Expense.id == expense_id,
+            Expense.user_id == user.id,
+            Expense.company_id == getattr(user, "company_id", 1),
+        )
         .first()
     )
     if not expense:

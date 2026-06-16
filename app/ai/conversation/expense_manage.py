@@ -147,6 +147,7 @@ class ExpenseManageWorkflow:
         *,
         session_id: Optional[str] = None,
         user_id: Optional[int] = None,
+        company_id: Optional[int] = None,
         initial_text: Optional[str] = None,
     ) -> StateMachineResult:
         wf_type = (
@@ -157,7 +158,11 @@ class ExpenseManageWorkflow:
         state = ConversationWorkflowState(
             workflow_type=wf_type,
             scope=WorkflowScope.EXPENSE,
-            slots={"action": action, "user_id": user_id},
+            slots={
+                "action": action,
+                "user_id": user_id,
+                "company_id": company_id,
+            },
             pending_slots=["date_range"],
             session_id=session_id,
         )
@@ -227,6 +232,7 @@ class ExpenseManageWorkflow:
 
         start, end = parsed
         user_id = state.slots.get("user_id")
+        company_id = state.slots.get("company_id") or 1
         if user_id is None:
             return StateMachineResult(
                 handled=True,
@@ -239,6 +245,7 @@ class ExpenseManageWorkflow:
             start_date=start,
             end_date=end,
             limit=50,
+            company_id=company_id,
         )
 
         candidate_ids = [e.id for e in expenses]
@@ -290,9 +297,10 @@ class ExpenseManageWorkflow:
 
         candidates = state.slots.get("candidate_ids") or []
         user_id = state.slots.get("user_id")
+        company_id = state.slots.get("company_id") or 1
         if eid not in candidates and user_id:
             svc = ExpenseService(self._db)
-            exp = svc.get_expense(eid, user_id)
+            exp = svc.get_expense(eid, user_id, company_id)
             if not exp:
                 return StateMachineResult(
                     handled=True,

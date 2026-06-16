@@ -5,7 +5,8 @@ from typing import Any, Dict, List, Optional
 
 from app.ai.json_util import draft_context_to_storage
 from app.ai.memory.repository import AIRepository
-from app.ai.schemas.common import SessionContext, TenantUserContext
+from app.ai.schemas.common import SessionContext
+from app.ai.security import tenant_user_from_ctx
 from app.ai.models.entities import MemoryType
 from app.ai.schemas.memory import DraftExpenseContext, MemoryEntryCreate, PendingIntent
 from app.ai.schemas.workflow import ConversationWorkflowState
@@ -34,8 +35,8 @@ class ResilientMemoryStore:
     async def disconnect(self) -> None:
         return None
 
-    def _tenant_user(self, ctx: SessionContext) -> TenantUserContext:
-        return TenantUserContext(tenant_id=ctx.tenant_id, user_id=ctx.user_id)
+    def _tenant_user(self, ctx: SessionContext):
+        return tenant_user_from_ctx(ctx)
 
     async def _delete_pg_key(self, ctx: SessionContext, base_key: str) -> None:
         tu = self._tenant_user(ctx)

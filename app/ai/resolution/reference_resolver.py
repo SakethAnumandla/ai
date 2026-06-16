@@ -53,10 +53,12 @@ class ReferenceResolver:
     def __init__(self, db: Session):
         self._db = db
 
-    def _recent_expenses(self, user_id: int, *, limit: int = 15) -> List[Expense]:
+    def _recent_expenses(
+        self, user_id: int, *, company_id: int, limit: int = 15
+    ) -> List[Expense]:
         return (
             self._db.query(Expense)
-            .filter(Expense.user_id == user_id)
+            .filter(Expense.user_id == user_id, Expense.company_id == company_id)
             .order_by(Expense.bill_date.desc(), Expense.created_at.desc())
             .limit(limit)
             .all()
@@ -77,14 +79,14 @@ class ReferenceResolver:
         now = now or datetime.now(timezone.utc)
         return (now - timedelta(days=1)).replace(tzinfo=None)
 
-    def resolve(self, user_id: int, text: str) -> ResolvedReferences:
+    def resolve(self, user_id: int, text: str, *, company_id: int = 1) -> ResolvedReferences:
         lowered = text.strip().lower()
         result = ResolvedReferences()
 
         if describes_new_expense(text):
             self._extract_new_expense_fields(text, result)
 
-        expenses = self._recent_expenses(user_id)
+        expenses = self._recent_expenses(user_id, company_id=company_id)
         if not expenses:
             return result
 

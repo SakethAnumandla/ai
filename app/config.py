@@ -162,6 +162,13 @@ class Settings(BaseSettings):
     # CORS — comma-separated origins, or "*" for all (default)
     cors_origins: str = "*"
 
+    # Bizwy identity — token validation (production) or dev query-param trust
+    bizwy_auth_mode: str = "dev"  # dev | token
+    bizwy_api_base_url: str = "https://business.bizwy.in/v2"
+    bizwy_validate_token_path: str = "authorization/validateToken.php"
+    bizwy_token_cache_seconds: int = 300
+    bizwy_http_timeout_seconds: float = 10.0
+
     model_config = SettingsConfigDict(
         env_file=_ENV_FILE,
         env_file_encoding="utf-8",

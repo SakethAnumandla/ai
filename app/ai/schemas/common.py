@@ -10,6 +10,11 @@ class TenantUserContext(BaseModel):
 
     tenant_id: int = Field(..., ge=1)
     user_id: int = Field(..., ge=1)
+    company_id: Optional[int] = Field(None, ge=1)
+
+    @property
+    def scoped_company_id(self) -> int:
+        return int(self.company_id or self.tenant_id)
 
     model_config = {"frozen": True}
 

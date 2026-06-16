@@ -7,8 +7,9 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.dependencies import TimePeriodFilter, get_default_user
-from app.models import TransactionType, User
+from app.dependencies import TimePeriodFilter
+from app.deps.scope import ExpenseScope, ScopedActor, get_expense_scope
+from app.models import TransactionType
 from app.schemas import CategoryWiseExpense, DashboardOverviewResponse, DashboardStatsResponse, MonthlySummary
 from app.services.dashboard_service import DashboardService
 from app.services.export_service import ExportService
@@ -28,16 +29,19 @@ def _txn_type(raw: Optional[str]) -> TransactionType:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+def _actor(scope: ExpenseScope) -> ScopedActor:
+    return ScopedActor.from_scope(scope)
+
+
 @router.get("/stats", response_model=DashboardStatsResponse)
 async def get_dashboard_stats(
     time_period: TimePeriodFilter = Depends(),
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_default_user),
+    scope: ExpenseScope = Depends(get_expense_scope),
 ):
     """Dashboard totals for the selected time period (income/expense in range)."""
-    service = DashboardService(db)
-    return service.get_stats(
-        current_user, time_period.resolved, date_range_info(time_period)
+    return DashboardService(db).get_stats(
+        _actor(scope), time_period.resolved, date_range_info(time_period)
     )
 
 
@@ -51,12 +55,11 @@ async def get_dashboard_overview(
     recent_limit: int = Query(10, ge=1, le=50),
     top_limit: int = Query(5, ge=1, le=10),
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_default_user),
+    scope: ExpenseScope = Depends(get_expense_scope),
 ):
     """All main dashboard widgets in one call — same `period` filter applied everywhere."""
-    service = DashboardService(db)
-    return service.get_overview(
-        current_user,
+    return DashboardService(db).get_overview(
+        _actor(scope),
         time_period.resolved,
         date_range_info(time_period),
         txn_type=_txn_type(transaction_type),
@@ -73,11 +76,12 @@ async def get_category_breakdown(
         description="expense, out, income, in — default expense",
     ),
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_default_user),
+    scope: ExpenseScope = Depends(get_expense_scope),
 ):
     """Expense/income breakdown by category for the selected time period."""
+    actor = _actor(scope)
     return DashboardService(db).category_breakdown(
-        current_user.id, time_period.resolved, _txn_type(transaction_type)
+        actor.user_id, time_period.resolved, _txn_type(transaction_type), actor.company_id
     )
 
 
@@ -91,11 +95,12 @@ async def get_monthly_trend(
         description="Override: number of months (ignored if period is set)",
     ),
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_default_user),
+    scope: ExpenseScope = Depends(get_expense_scope),
 ):
     """Monthly income/expense trend within the selected time period."""
+    actor = _actor(scope)
     return DashboardService(db).monthly_trend(
-        current_user.id, time_period.resolved, months
+        actor.user_id, time_period.resolved, months, company_id=actor.company_id
     )
 
 
@@ -104,11 +109,16 @@ async def get_recent_transactions(
     time_period: TimePeriodFilter = Depends(),
     limit: int = Query(10, ge=1, le=50),
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_default_user),
+    scope: ExpenseScope = Depends(get_expense_scope),
 ):
     """Recent approved transactions in the period, plus the latest upload (any date/status)."""
+    actor = _actor(scope)
     return recent_transactions_list(
-        db, current_user.id, time_period.resolved, limit=limit
+        db,
+        actor.user_id,
+        time_period.resolved,
+        limit=limit,
+        company_id=actor.company_id,
     )
 
 
@@ -121,14 +131,16 @@ async def get_top_categories(
         description="expense, out, income, in — default expense",
     ),
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_default_user),
+    scope: ExpenseScope = Depends(get_expense_scope),
 ):
     """Top categories by spend/earn in the selected time period."""
+    actor = _actor(scope)
     return DashboardService(db).top_categories(
-        user_id=current_user.id,
+        user_id=actor.user_id,
         resolved=time_period.resolved,
         txn_type=_txn_type(transaction_type),
         limit=limit,
+        company_id=actor.company_id,
     )
 
 
@@ -136,32 +148,36 @@ async def get_top_categories(
 async def get_daily_spending(
     time_period: TimePeriodFilter = Depends(),
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_default_user),
+    scope: ExpenseScope = Depends(get_expense_scope),
 ):
     """Daily expense totals within the selected time period."""
+    actor = _actor(scope)
     return DashboardService(db).daily_spending(
-        current_user.id, time_period.resolved
+        actor.user_id, time_period.resolved, company_id=actor.company_id
     )
 
 
 @router.get("/pending-approvals-summary")
 async def get_pending_approvals_summary(
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_default_user),
+    scope: ExpenseScope = Depends(get_expense_scope),
 ):
     """Summary of pending approvals (not filtered by period — open workflow items)."""
-    return DashboardService(db).pending_approvals_summary(current_user.id)
+    return DashboardService(db).pending_approvals_summary(
+        _actor(scope).user_id, company_id=scope.company_id
+    )
 
 
 @router.get("/ocr-statistics")
 async def get_ocr_statistics(
     time_period: TimePeriodFilter = Depends(),
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_default_user),
+    scope: ExpenseScope = Depends(get_expense_scope),
 ):
     """OCR scan statistics for the selected time period."""
+    actor = _actor(scope)
     return DashboardService(db).ocr_statistics(
-        current_user.id, time_period.resolved, time_period.as_meta()
+        actor.user_id, time_period.resolved, time_period.as_meta(), company_id=actor.company_id
     )
 
 
@@ -170,16 +186,18 @@ async def get_budget_vs_actual(
     time_period: TimePeriodFilter = Depends(),
     month: Optional[str] = None,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_default_user),
+    scope: ExpenseScope = Depends(get_expense_scope),
 ):
     """Compare actual spending vs budget for the selected period or YYYY-MM month."""
+    actor = _actor(scope)
     return DashboardService(db).budget_vs_actual(
-        current_user.id,
+        actor.user_id,
         month=month,
         start_date=time_period.start_date,
         end_date=time_period.end_date,
         date_range_meta=time_period.as_meta(),
         period_label=time_period.resolved.label,
+        company_id=actor.company_id,
     )
 
 
@@ -188,13 +206,14 @@ async def export_expense_data(
     time_period: TimePeriodFilter = Depends(),
     format: str = Query("json", pattern="^(json|csv)$"),
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_default_user),
+    scope: ExpenseScope = Depends(get_expense_scope),
 ):
     """Export approved expenses in the selected time period."""
     try:
+        actor = _actor(scope)
         export_service = ExportService(db)
         rows = export_service.list_approved_for_period(
-            current_user.id, time_period.resolved
+            actor.user_id, time_period.resolved, company_id=actor.company_id
         )
         if format == "csv":
             label = time_period.resolved.period.replace("_", "-")
@@ -215,9 +234,10 @@ async def export_expense_data(
 async def get_quick_insights(
     time_period: TimePeriodFilter = Depends(),
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_default_user),
+    scope: ExpenseScope = Depends(get_expense_scope),
 ):
     """Quick spending insights for the selected time period."""
+    actor = _actor(scope)
     return DashboardService(db).quick_insights(
-        current_user.id, time_period.resolved, time_period.as_meta()
+        actor.user_id, time_period.resolved, time_period.as_meta(), company_id=actor.company_id
     )

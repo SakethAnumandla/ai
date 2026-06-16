@@ -143,6 +143,7 @@ class ManualExpenseService:
 
         expense = Expense(
             user_id=user.id,
+            company_id=getattr(user, "company_id", 1),
             bill_name=form.bill_name,
             bill_amount=form.bill_amount,
             bill_date=parsed_date,
@@ -273,7 +274,12 @@ class ManualExpenseService:
             can_preview=resp.can_preview,
         )
 
-    def list_drafts(self, user_id: int, batch_id: Optional[int] = None) -> List[ExpenseResponse]:
+    def list_drafts(
+        self,
+        user_id: int,
+        batch_id: Optional[int] = None,
+        company_id: int = 1,
+    ) -> List[ExpenseResponse]:
         if batch_id is not None:
             expense_ids = [
                 row[0]
@@ -281,6 +287,7 @@ class ManualExpenseService:
                 .filter(
                     OCRBill.batch_id == batch_id,
                     OCRBill.user_id == user_id,
+                    OCRBill.company_id == company_id,
                     OCRBill.expense_id.isnot(None),
                 )
                 .all()
@@ -293,6 +300,7 @@ class ManualExpenseService:
                 .filter(
                     Expense.id.in_(expense_ids),
                     Expense.user_id == user_id,
+                    Expense.company_id == company_id,
                     Expense.status == ExpenseStatus.DRAFT,
                 )
                 .order_by(Expense.id.asc())
@@ -300,5 +308,5 @@ class ManualExpenseService:
             )
             return [build_expense_response(e) for e in rows]
 
-        rows = ExpenseService(self.db).get_draft_expenses(user_id)
+        rows = ExpenseService(self.db).get_draft_expenses(user_id, company_id=company_id)
         return [build_expense_response(e) for e in rows]

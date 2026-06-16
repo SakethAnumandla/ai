@@ -58,15 +58,21 @@ def merge_latest_upload(
     return merged[:limit]
 
 
+def _expense_owner(q, user_id: int, company_id: Optional[int] = None):
+    q = q.filter(Expense.user_id == user_id)
+    if company_id is not None:
+        q = q.filter(Expense.company_id == company_id)
+    return q
+
+
 def approved_expenses_query(
     db: Session,
     user_id: int,
     time_period: ResolvedTimePeriod,
+    company_id: Optional[int] = None,
 ):
-    q = db.query(Expense).filter(
-        Expense.user_id == user_id,
-        Expense.status == ExpenseStatus.APPROVED,
-    )
+    q = db.query(Expense).filter(Expense.status == ExpenseStatus.APPROVED)
+    q = _expense_owner(q, user_id, company_id)
     return apply_bill_date_filter(q, Expense, time_period)
 
 
@@ -76,8 +82,10 @@ def compute_dashboard_stats(
     time_period: ResolvedTimePeriod,
     *,
     wallet_balance: float,
+    company_id: Optional[int] = None,
 ) -> DashboardStats:
-    approved = approved_expenses_query(db, user.id, time_period).all()
+    cid = company_id if company_id is not None else getattr(user, "company_id", None)
+    approved = approved_expenses_query(db, user.id, time_period, cid).all()
     total_income = sum(
         e.bill_amount for e in approved if e.transaction_type == TransactionType.INCOME
     )
@@ -86,13 +94,11 @@ def compute_dashboard_stats(
     )
 
     pending_q = db.query(Expense).filter(
-        Expense.user_id == user.id,
         Expense.status.in_([ExpenseStatus.SUBMITTED, ExpenseStatus.PENDING]),
     )
-    draft_q = db.query(Expense).filter(
-        Expense.user_id == user.id,
-        Expense.status == ExpenseStatus.DRAFT,
-    )
+    draft_q = db.query(Expense).filter(Expense.status == ExpenseStatus.DRAFT)
+    pending_q = _expense_owner(pending_q, user.id, cid)
+    draft_q = _expense_owner(draft_q, user.id, cid)
     if not time_period.is_all_time:
         pending_q = apply_bill_date_filter(pending_q, Expense, time_period)
         draft_q = apply_bill_date_filter(draft_q, Expense, time_period)
@@ -114,6 +120,7 @@ def compute_category_breakdown(
     user_id: int,
     time_period: ResolvedTimePeriod,
     transaction_type: TransactionType,
+    company_id: Optional[int] = None,
 ) -> List[CategoryWiseExpense]:
     q = (
         db.query(
@@ -122,11 +129,11 @@ def compute_category_breakdown(
             func.count(Expense.id).label("count"),
         )
         .filter(
-            Expense.user_id == user_id,
             Expense.status == ExpenseStatus.APPROVED,
             Expense.transaction_type == transaction_type,
         )
     )
+    q = _expense_owner(q, user_id, company_id)
     q = apply_bill_date_filter(q, Expense, time_period)
     rows = q.group_by(Expense.main_category).all()
     total = sum(r.total_amount for r in rows)
@@ -151,19 +158,16 @@ def recent_transactions_list(
     time_period: ResolvedTimePeriod,
     *,
     limit: int = 10,
+    company_id: Optional[int] = None,
 ) -> list:
     approved = (
-        approved_expenses_query(db, user_id, time_period)
+        approved_expenses_query(db, user_id, time_period, company_id)
         .order_by(Expense.bill_date.desc())
         .limit(limit)
         .all()
     )
     rows = [serialize_recent_transaction(t) for t in approved]
 
-    latest_upload = (
-        db.query(Expense)
-        .filter(Expense.user_id == user_id)
-        .order_by(Expense.created_at.desc())
-        .first()
-    )
+    latest_upload_q = db.query(Expense).order_by(Expense.created_at.desc())
+    latest_upload = _expense_owner(latest_upload_q, user_id, company_id).first()
     return merge_latest_upload(rows, latest_upload, limit=limit)

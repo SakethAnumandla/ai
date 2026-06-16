@@ -8,9 +8,10 @@ from sqlalchemy.orm import Session
 
 from app.data.business_taxonomy import APPROVER_DIRECTORY
 from app.database import get_db
-from app.dependencies import ExpenseFilters, PaginationParams, get_current_user, get_default_user
+from app.dependencies import ExpenseFilters, PaginationParams
+from app.deps.scope import ExpenseScope, CompanyScope, ScopedActor, get_company_scope, get_expense_scope
 from app.domain.workflow_schemas import ExpenseApprovalAction
-from app.models import ExpenseStatus, MainCategory, TransactionType, User
+from app.models import Expense, ExpenseStatus, MainCategory, TransactionType
 from app.services.expense_approval_service import (
     build_expense_approval_remarks_payload,
     build_expense_approval_workflow_payload,
@@ -44,6 +45,14 @@ from app.utils.async_io import run_blocking
 router = APIRouter(prefix="/expenses", tags=["expenses"])
 
 
+def _access(db: Session) -> ExpenseAccessService:
+    return ExpenseAccessService(db)
+
+
+def _load_expense(db: Session, expense_id: int, scope: ExpenseScope):
+    return _access(db).get_for_scope(expense_id, scope)
+
+
 # ── Expense approval workflow (duplicate paths for older deployments) ──────────
 
 
@@ -55,18 +64,24 @@ async def expense_approver_directory():
 @router.get("/approvals/pending")
 async def pending_expense_approvals(
     db: Session = Depends(get_db),
-    user: User = Depends(get_current_user),
+    scope: CompanyScope = Depends(get_company_scope),
 ):
-    return build_pending_expense_approval_queue(db, user.id)
+    return build_pending_expense_approval_queue(
+        db, scope.approver_user_id, company_id=scope.company_id
+    )
 
 
 @router.get("/{expense_id}/approval-workflow")
 async def expense_approval_workflow(
     expense_id: int,
     db: Session = Depends(get_db),
-    user: User = Depends(get_current_user),
+    scope: CompanyScope = Depends(get_company_scope),
 ):
-    expense = get_expense_for_viewer(db, expense_id, user)
+    expense = (
+        db.query(Expense)
+        .filter(Expense.id == expense_id, Expense.company_id == scope.company_id)
+        .first()
+    )
     if not expense:
         raise HTTPException(404, "Expense not found")
     return build_expense_approval_workflow_payload(expense)
@@ -77,13 +92,16 @@ async def expense_approval_action(
     approval_id: int,
     body: ExpenseApprovalAction,
     db: Session = Depends(get_db),
-    user: User = Depends(get_current_user),
+    scope: CompanyScope = Depends(get_company_scope),
 ):
     try:
+        from app.models import User
+
+        actor = User(id=scope.approver_user_id)
         expense = process_expense_approval(
             db,
             approval_id=approval_id,
-            user=user,
+            user=actor,
             action=body.action,
             comments=body.resolved_remarks(),
         )
@@ -99,10 +117,10 @@ async def scan_manual_expense(
     file: UploadFile = File(..., description="Receipt/bill image or PDF — OCR prefills the form"),
     force_duplicate: bool = Query(False),
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_default_user),
+    current_user: ExpenseScope = Depends(get_expense_scope),
 ):
     return await ManualExpenseService(db).scan_manual_prefill(
-        current_user, file, force_duplicate=force_duplicate
+        ScopedActor.from_scope(current_user), file, force_duplicate=force_duplicate
     )
 
 
@@ -135,7 +153,7 @@ async def create_manual_expense(
     submitted_by_role: Optional[str] = Form(None),
     force_duplicate: bool = Query(False),
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_default_user),
+    current_user: ExpenseScope = Depends(get_expense_scope),
 ):
     form = ManualExpenseForm(
         bill_name=bill_name,
@@ -164,14 +182,16 @@ async def create_manual_expense(
         submitted_by_role=submitted_by_role,
         force_duplicate=force_duplicate,
     )
-    return await ManualExpenseService(db).create_manual(current_user, form, files)
+    return await ManualExpenseService(db).create_manual(
+        ScopedActor.from_scope(current_user), form, files
+    )
 
 
 @router.post("/upload-drafts", response_model=MultiBillDraftResponse)
 async def upload_files_as_drafts(
     files: List[UploadFile] = File(...),
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_default_user),
+    current_user: ExpenseScope = Depends(get_expense_scope),
 ):
     if not files:
         raise HTTPException(status_code=400, detail="At least one file is required")
@@ -182,9 +202,10 @@ async def upload_files_as_drafts(
     result = await run_blocking(
         process_multi_file_drafts,
         db,
-        current_user.id,
+        current_user.user_id,
         file_infos,
         use_ocr=False,
+        company_id=current_user.company_id,
     )
     return to_multi_bill_response(result, db)
 
@@ -193,18 +214,20 @@ async def upload_files_as_drafts(
 async def list_draft_expenses(
     batch_id: Optional[int] = None,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_default_user),
+    current_user: ExpenseScope = Depends(get_expense_scope),
 ):
-    return ManualExpenseService(db).list_drafts(current_user.id, batch_id=batch_id)
+    return ManualExpenseService(db).list_drafts(
+        current_user.user_id, batch_id=batch_id, company_id=current_user.company_id
+    )
 
 
 @router.get("/{expense_id}/taxes", response_model=ExpenseTaxSummary)
 async def get_expense_taxes(
     expense_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_default_user),
+    current_user: ExpenseScope = Depends(get_expense_scope),
 ):
-    expense = ExpenseAccessService(db).get_for_viewer(expense_id, current_user.id)
+    expense = _load_expense(db, expense_id, current_user)
     return build_tax_summary_response(expense)
 
 
@@ -213,9 +236,9 @@ async def replace_expense_taxes(
     expense_id: int,
     body: ExpenseTaxesReplaceRequest,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_default_user),
+    current_user: ExpenseScope = Depends(get_expense_scope),
 ):
-    expense = ExpenseAccessService(db).get_for_viewer(expense_id, current_user.id)
+    expense = _load_expense(db, expense_id, current_user)
     if expense.status == ExpenseStatus.APPROVED:
         raise HTTPException(status_code=400, detail="Cannot edit taxes on approved expense")
     if expense.status in (ExpenseStatus.SUBMITTED, ExpenseStatus.PENDING):
@@ -225,7 +248,7 @@ async def replace_expense_taxes(
     TaxService(db).replace_expense_taxes(expense, coerce_tax_line_dicts(body.tax_lines))
     db.commit()
     db.refresh(expense)
-    expense = ExpenseAccessService(db).get_for_viewer(expense_id, current_user.id)
+    expense = _load_expense(db, expense_id, current_user)
     return build_tax_summary_response(expense)
 
 
@@ -233,10 +256,10 @@ async def replace_expense_taxes(
 async def get_expense_approval_remarks(
     expense_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_default_user),
+    current_user: ExpenseScope = Depends(get_expense_scope),
 ):
     """Approver remarks table for bill details (L1/L2/L3 after approve or reject)."""
-    expense = ExpenseAccessService(db).get_for_viewer(expense_id, current_user.id)
+    expense = _load_expense(db, expense_id, current_user)
     return build_expense_approval_remarks_payload(expense)
 
 
@@ -244,11 +267,11 @@ async def get_expense_approval_remarks(
 async def get_expense_with_ocr_details(
     expense_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_default_user),
+    current_user: ExpenseScope = Depends(get_expense_scope),
 ):
     access = ExpenseAccessService(db)
-    expense = access.get_for_viewer(expense_id, current_user.id)
-    ocr_bill = access.get_ocr_bill(expense_id, expense.user_id)
+    expense = access.get_for_scope(expense_id, current_user)
+    ocr_bill = access.get_ocr_bill_for_scope(expense_id, current_user)
     return build_expense_detail_response(expense, ocr_bill)
 
 
@@ -257,12 +280,12 @@ async def submit_draft_expense(
     expense_id: int,
     body: ExpenseSubmit,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_default_user),
+    current_user: ExpenseScope = Depends(get_expense_scope),
 ):
-    expense = ExpenseService(db).submit_draft(expense_id, current_user.id, body)
-    return build_expense_response(
-        ExpenseAccessService(db).get_for_viewer(expense.id, current_user.id)
+    expense = ExpenseService(db).submit_draft(
+        expense_id, current_user.user_id, body, company_id=current_user.company_id
     )
+    return build_expense_response(_load_expense(db, expense.id, current_user))
 
 
 @router.post("/{expense_id}/resubmit", response_model=ExpenseResponse)
@@ -270,25 +293,30 @@ async def resubmit_rejected_expense(
     expense_id: int,
     body: ExpenseSubmit,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_default_user),
+    current_user: ExpenseScope = Depends(get_expense_scope),
 ):
-    expense = ExpenseAccessService(db).get_for_viewer(expense_id, current_user.id)
+    expense = _load_expense(db, expense_id, current_user)
     if expense.status != ExpenseStatus.REJECTED:
         raise HTTPException(status_code=400, detail="Only rejected expenses can be resubmitted")
     submit_data = body.model_copy(update={"confirm_submit": True, "save_as_draft": False})
-    expense = ExpenseService(db).submit_draft(expense_id, current_user.id, submit_data)
-    return build_expense_response(
-        ExpenseAccessService(db).get_for_viewer(expense.id, current_user.id)
+    expense = ExpenseService(db).submit_draft(
+        expense_id,
+        current_user.user_id,
+        submit_data,
+        company_id=current_user.company_id,
     )
+    return build_expense_response(_load_expense(db, expense.id, current_user))
 
 
 @router.post("/{expense_id}/discard", status_code=status.HTTP_204_NO_CONTENT)
 async def discard_incomplete_draft(
     expense_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_default_user),
+    current_user: ExpenseScope = Depends(get_expense_scope),
 ):
-    ExpenseService(db).discard_incomplete_draft(expense_id, current_user.id)
+    ExpenseService(db).discard_incomplete_draft(
+        expense_id, current_user.user_id, company_id=current_user.company_id
+    )
     return None
 
 
@@ -297,10 +325,11 @@ async def list_expenses(
     pagination: PaginationParams = Depends(),
     filters: ExpenseFilters = Depends(),
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_default_user),
+    current_user: ExpenseScope = Depends(get_expense_scope),
 ):
     expenses, _ = ExpenseService(db).get_user_expenses(
-        user_id=current_user.id,
+        user_id=current_user.user_id,
+        company_id=current_user.company_id,
         status=filters.status,
         statuses=filters.statuses,
         main_category=filters.main_category,
@@ -323,11 +352,9 @@ async def list_expenses(
 async def get_expense(
     expense_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_default_user),
+    current_user: ExpenseScope = Depends(get_expense_scope),
 ):
-    return build_expense_response(
-        ExpenseAccessService(db).get_for_viewer(expense_id, current_user.id)
-    )
+    return build_expense_response(_load_expense(db, expense_id, current_user))
 
 
 @router.patch("/{expense_id}", response_model=ExpenseResponse)
@@ -335,12 +362,12 @@ async def update_expense(
     expense_id: int,
     body: ExpenseUpdate,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_default_user),
+    current_user: ExpenseScope = Depends(get_expense_scope),
 ):
-    expense = ExpenseService(db).update_expense(expense_id, current_user.id, body)
-    return build_expense_response(
-        ExpenseAccessService(db).get_for_viewer(expense.id, current_user.id)
+    expense = ExpenseService(db).update_expense(
+        expense_id, current_user.user_id, body, company_id=current_user.company_id
     )
+    return build_expense_response(_load_expense(db, expense.id, current_user))
 
 
 @router.post("/{expense_id}/approve", response_model=ExpenseResponse)
@@ -348,11 +375,19 @@ async def approve_expense(
     expense_id: int,
     body: ExpenseApproval,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_default_user),
+    scope: CompanyScope = Depends(get_company_scope),
 ):
+    from app.models import User
     from app.services.expense_approval_service import approve_expense_current_step
 
-    expense = ExpenseAccessService(db).get_for_viewer(expense_id, current_user.id)
+    expense = (
+        db.query(Expense)
+        .filter(Expense.id == expense_id, Expense.company_id == scope.company_id)
+        .first()
+    )
+    if not expense:
+        raise HTTPException(status_code=404, detail="Expense not found")
+    actor = User(id=scope.approver_user_id)
     if expense.approval_steps:
         action = "approve" if body.status == ExpenseStatus.APPROVED else "reject"
         try:
@@ -361,7 +396,7 @@ async def approve_expense(
                 expense,
                 action=action,
                 comments=body.comments or body.rejection_reason,
-                user=current_user,
+                user=actor,
             )
             db.commit()
             db.refresh(expense)
@@ -370,22 +405,23 @@ async def approve_expense(
     else:
         expense = ExpenseService(db).update_expense_status(
             expense_id,
-            current_user.id,
+            expense.user_id,
             body.status,
             rejection_reason=body.rejection_reason,
+            company_id=scope.company_id,
         )
-    return build_expense_response(
-        ExpenseAccessService(db).get_for_viewer(expense.id, current_user.id)
-    )
+    return build_expense_response(expense)
 
 
 @router.delete("/{expense_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_expense(
     expense_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_default_user),
+    current_user: ExpenseScope = Depends(get_expense_scope),
 ):
-    ExpenseService(db).delete_expense(expense_id, current_user.id)
+    ExpenseService(db).delete_expense(
+        expense_id, current_user.user_id, company_id=current_user.company_id
+    )
     return None
 
 
@@ -394,7 +430,7 @@ async def add_files_to_expense(
     expense_id: int,
     files: List[UploadFile] = File(...),
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_default_user),
+    current_user: ExpenseScope = Depends(get_expense_scope),
 ):
     return await ExpenseFileService(db).add_files(expense_id, current_user.id, files)
 
@@ -403,7 +439,7 @@ async def add_files_to_expense(
 async def get_expense_files(
     expense_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_default_user),
+    current_user: ExpenseScope = Depends(get_expense_scope),
 ):
     return ExpenseFileService(db).list_files(expense_id, current_user.id)
 
@@ -414,7 +450,7 @@ async def download_expense_file_by_id(
     file_id: int,
     download: bool = False,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_default_user),
+    current_user: ExpenseScope = Depends(get_expense_scope),
 ):
     body, mime, headers = ExpenseFileService(db).file_stream(
         expense_id, file_id, current_user.id, download=download
@@ -427,7 +463,7 @@ async def get_expense_file_thumbnail(
     expense_id: int,
     file_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_default_user),
+    current_user: ExpenseScope = Depends(get_expense_scope),
 ):
     body, mime, headers = ExpenseFileService(db).thumbnail_stream(
         expense_id, file_id, current_user.id
@@ -440,7 +476,7 @@ async def delete_expense_file(
     expense_id: int,
     file_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_default_user),
+    current_user: ExpenseScope = Depends(get_expense_scope),
 ):
     ExpenseFileService(db).delete_file(expense_id, file_id, current_user.id)
     return None
@@ -451,7 +487,7 @@ async def download_expense_file_legacy(
     expense_id: int,
     download: bool = False,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_default_user),
+    current_user: ExpenseScope = Depends(get_expense_scope),
 ):
     body, _name, mime, headers = ExpenseFileService(db).legacy_file_stream(
         expense_id, current_user.id, download=download
@@ -463,7 +499,7 @@ async def download_expense_file_legacy(
 async def get_expense_thumbnail_legacy(
     expense_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_default_user),
+    current_user: ExpenseScope = Depends(get_expense_scope),
 ):
     body, mime, headers = ExpenseFileService(db).legacy_thumbnail_stream(
         expense_id, current_user.id

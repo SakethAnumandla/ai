@@ -480,7 +480,8 @@ class Expense(Base):
     
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
-    
+    company_id = Column(Integer, nullable=False, default=1, index=True)
+
     # Basic fields
     bill_name = Column(String, nullable=False)
     bill_amount = Column(Float, nullable=False)
@@ -562,6 +563,7 @@ class Expense(Base):
     
     # Indexes for better performance
     __table_args__ = (
+        Index('idx_expenses_owner', 'company_id', 'user_id'),
         Index('ix_expenses_user_status', 'user_id', 'status'),
         Index('ix_expenses_user_date', 'user_id', 'bill_date'),
         Index('ix_expenses_user_category', 'user_id', 'main_category'),
@@ -600,7 +602,10 @@ class ExpenseApproval(Base):
 # ==================== AI chat session metadata ====================
 
 class AIChatSession(Base):
-    """Persisted chat session list (messages live in ai_conversations)."""
+    """Persisted chat session list (messages live in ai_conversations).
+
+    ``tenant_id`` stores the Bizwy ``company_id`` for multi-tenant isolation.
+    """
     __tablename__ = "ai_chat_sessions"
 
     id = Column(Integer, primary_key=True, index=True)
@@ -686,6 +691,7 @@ class OCRBatch(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    company_id = Column(Integer, nullable=False, default=1, index=True)
     batch_name = Column(String, nullable=True)
     total_files = Column(Integer, default=0)
     processed_files = Column(Integer, default=0)
@@ -703,6 +709,7 @@ class OCRBill(Base):
     
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    company_id = Column(Integer, nullable=False, default=1, index=True)
     expense_id = Column(Integer, ForeignKey("expenses.id", ondelete="SET NULL"), nullable=True)
     batch_id = Column(Integer, ForeignKey("ocr_batches.id", ondelete="SET NULL"), nullable=True)
 
@@ -834,7 +841,8 @@ class Wallet(Base):
     __tablename__ = "wallets"
     
     id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), unique=True, nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    company_id = Column(Integer, nullable=False, default=1, index=True)
     balance = Column(Float, default=0.0)
     total_income = Column(Float, default=0.0)
     total_expense = Column(Float, default=0.0)
@@ -844,6 +852,10 @@ class Wallet(Base):
     # Relationships
     user = relationship("User", back_populates="wallet")
     transactions = relationship("WalletTransaction", back_populates="wallet", cascade="all, delete-orphan")
+
+    __table_args__ = (
+        Index("idx_wallet_owner", "company_id", "user_id", unique=True),
+    )
 
 
 class WalletTransaction(Base):
@@ -878,6 +890,7 @@ class Budget(Base):
     
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    company_id = Column(Integer, nullable=False, default=1, index=True)
     main_category = Column(Enum(MainCategory), nullable=False)
     sub_category = Column(String, nullable=True)
     month = Column(Integer, nullable=False)  # 1-12

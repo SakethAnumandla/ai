@@ -110,10 +110,11 @@ class ExportService:
         }
 
     def list_approved_for_period(
-        self, user_id: int, resolved: ResolvedTimePeriod
+        self, user_id: int, resolved: ResolvedTimePeriod, company_id: int = 1
     ) -> List[dict]:
         q = self.db.query(Expense).filter(
             Expense.user_id == user_id,
+            Expense.company_id == company_id,
             Expense.status == ExpenseStatus.APPROVED,
         )
         q = apply_bill_date_filter(q, Expense, resolved)

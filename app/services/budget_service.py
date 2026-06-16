@@ -30,11 +30,14 @@ def _month_bounds(year: int, month: int) -> tuple[datetime, datetime]:
     return month_start, month_end
 
 
-def _approved_spend(db: Session, user_id: int, start: datetime, end: datetime) -> float:
+def _approved_spend(
+    db: Session, user_id: int, start: datetime, end: datetime, company_id: int = 1
+) -> float:
     total = (
         db.query(func.coalesce(func.sum(Expense.bill_amount), 0))
         .filter(
             Expense.user_id == user_id,
+            Expense.company_id == company_id,
             Expense.status == ExpenseStatus.APPROVED,
             Expense.bill_date >= start,
             Expense.bill_date <= end,
@@ -44,12 +47,14 @@ def _approved_spend(db: Session, user_id: int, start: datetime, end: datetime) -
     return float(total or 0)
 
 
-def monthly_budget_utilisation(db: Session, user_id: int) -> Dict[str, Any]:
+def monthly_budget_utilisation(
+    db: Session, user_id: int, company_id: int = 1
+) -> Dict[str, Any]:
     """Current month spend vs €1M target; optional prior-month comparison (hidden in April)."""
     now = utc_now()
     target = DEFAULT_MONTHLY_BUDGET_EUR
     cur_start, cur_end = _month_range(now.year, now.month)
-    current_actual = _approved_spend(db, user_id, cur_start, cur_end)
+    current_actual = _approved_spend(db, user_id, cur_start, cur_end, company_id)
     current_util = round((current_actual / target) * 100, 1) if target else 0.0
 
     result: Dict[str, Any] = {

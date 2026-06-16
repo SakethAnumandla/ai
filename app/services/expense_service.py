@@ -25,6 +25,14 @@ from app.schemas import ExpenseCreate, ExpenseSubmit, ExpenseUpdate
 from app.services.tax_service import TaxService
 from app.services.wallet_service import WalletService
 
+
+def _expense_owner_filter(query, user_id: int, company_id: Optional[int] = None):
+    query = query.filter(Expense.user_id == user_id)
+    if company_id is not None:
+        query = query.filter(Expense.company_id == company_id)
+    return query
+
+
 class ExpenseService:
     """Service class for handling expense-related business logic"""
     
@@ -38,6 +46,8 @@ class ExpenseService:
         user_id: int,
         upload_method: UploadMethod,
         status: ExpenseStatus = ExpenseStatus.PENDING,
+        company_id: int = 1,
+        currency_code: Optional[str] = None,
     ) -> Expense:
         """Create a new expense entry"""
         
@@ -65,6 +75,7 @@ class ExpenseService:
         # Create expense object
         expense = Expense(
             user_id=user_id,
+            company_id=company_id,
             bill_name=expense_data.bill_name,
             bill_amount=expense_data.bill_amount,
             bill_date=expense_data.bill_date,
@@ -92,7 +103,7 @@ class ExpenseService:
             sub_category=expense_data.sub_category,
             line_item=getattr(expense_data, "line_item", None),
             bill_date=expense_data.bill_date,
-            currency_code=getattr(expense_data, "currency_code", None),
+            currency_code=getattr(expense_data, "currency_code", None) or currency_code,
             vendor_name=expense_data.vendor_name,
         )
 
@@ -102,14 +113,16 @@ class ExpenseService:
         
         return expense
     
-    def get_expense(self, expense_id: int, user_id: int) -> Optional[Expense]:
+    def get_expense(
+        self, expense_id: int, user_id: int, company_id: Optional[int] = None
+    ) -> Optional[Expense]:
         """Get a single expense by ID"""
-        return (
+        query = (
             self.db.query(Expense)
             .options(joinedload(Expense.files), joinedload(Expense.tax_lines))
-            .filter(Expense.id == expense_id, Expense.user_id == user_id)
-            .first()
+            .filter(Expense.id == expense_id)
         )
+        return _expense_owner_filter(query, user_id, company_id).first()
     
     def get_user_expenses(
         self,
@@ -127,15 +140,16 @@ class ExpenseService:
         upload_method: Optional[str] = None,
         hashtag: Optional[str] = None,
         skip: int = 0,
-        limit: int = 100
+        limit: int = 100,
+        company_id: Optional[int] = None,
     ) -> Tuple[List[Expense], int]:
         """Get user's expenses with filters and pagination"""
         
         query = (
             self.db.query(Expense)
             .options(joinedload(Expense.files), joinedload(Expense.tax_lines))
-            .filter(Expense.user_id == user_id)
         )
+        query = _expense_owner_filter(query, user_id, company_id)
 
         if statuses:
             query = query.filter(Expense.status.in_(statuses))
@@ -194,11 +208,12 @@ class ExpenseService:
         self,
         expense_id: int,
         user_id: int,
-        expense_update: ExpenseUpdate
+        expense_update: ExpenseUpdate,
+        company_id: Optional[int] = None,
     ) -> Expense:
         """Update an existing expense"""
         
-        expense = self.get_expense(expense_id, user_id)
+        expense = self.get_expense(expense_id, user_id, company_id)
         if not expense:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -265,10 +280,12 @@ class ExpenseService:
 
         return expense
     
-    def delete_expense(self, expense_id: int, user_id: int) -> bool:
+    def delete_expense(
+        self, expense_id: int, user_id: int, company_id: Optional[int] = None
+    ) -> bool:
         """Delete an expense (not allowed for approved bills)."""
 
-        expense = self.get_expense(expense_id, user_id)
+        expense = self.get_expense(expense_id, user_id, company_id)
         if not expense:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -290,11 +307,12 @@ class ExpenseService:
         user_id: int,
         new_status: ExpenseStatus,
         rejection_reason: Optional[str] = None,
-        approver_id: Optional[int] = None
+        approver_id: Optional[int] = None,
+        company_id: Optional[int] = None,
     ) -> Expense:
         """Update expense status (approve/reject)"""
         
-        expense = self.get_expense(expense_id, user_id)
+        expense = self.get_expense(expense_id, user_id, company_id)
         if not expense:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -331,9 +349,11 @@ class ExpenseService:
         
         return expense
 
-    def submit_for_approval(self, expense_id: int, user_id: int) -> Expense:
+    def submit_for_approval(
+        self, expense_id: int, user_id: int, company_id: Optional[int] = None
+    ) -> Expense:
         """Move draft or legacy pending expense to submitted (awaiting approval)."""
-        expense = self.get_expense(expense_id, user_id)
+        expense = self.get_expense(expense_id, user_id, company_id)
         if not expense:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -427,21 +447,23 @@ class ExpenseService:
             Expense.status.in_([ExpenseStatus.SUBMITTED, ExpenseStatus.PENDING])
         ).order_by(Expense.bill_date.asc()).all()
     
-    def get_draft_expenses(self, user_id: int) -> List[Expense]:
+    def get_draft_expenses(
+        self, user_id: int, company_id: Optional[int] = None
+    ) -> List[Expense]:
         """Get all draft expenses for a user"""
-        return self.db.query(Expense).filter(
-            Expense.user_id == user_id,
-            Expense.status == ExpenseStatus.DRAFT
-        ).order_by(Expense.updated_at.desc()).all()
+        query = self.db.query(Expense).filter(Expense.status == ExpenseStatus.DRAFT)
+        query = _expense_owner_filter(query, user_id, company_id)
+        return query.order_by(Expense.updated_at.desc()).all()
     
     def submit_draft(
         self,
         expense_id: int,
         user_id: int,
         data: ExpenseSubmit,
+        company_id: Optional[int] = None,
     ) -> Expense:
         """Save draft fields; with confirm_submit move to submitted (awaiting approval)."""
-        expense = self.get_expense(expense_id, user_id)
+        expense = self.get_expense(expense_id, user_id, company_id)
         if not expense:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -530,9 +552,11 @@ class ExpenseService:
 
         return expense
 
-    def discard_incomplete_draft(self, expense_id: int, user_id: int) -> bool:
+    def discard_incomplete_draft(
+        self, expense_id: int, user_id: int, company_id: Optional[int] = None
+    ) -> bool:
         """Delete draft if minimum required fields are not filled."""
-        expense = self.get_expense(expense_id, user_id)
+        expense = self.get_expense(expense_id, user_id, company_id)
         if not expense:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,

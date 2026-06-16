@@ -1,18 +1,27 @@
 from sqlalchemy.orm import Session
 from app.models import Wallet, WalletTransaction, Expense, TransactionType, ExpenseStatus
+from app.deps.scope import ExpenseScope
+from app.services.expense_scope_service import wallet_owner_clause
 from datetime import datetime
 
 class WalletService:
     def __init__(self, db: Session):
         self.db = db
     
-    def get_or_create_wallet(self, user_id: int) -> Wallet:
-        """Get user's wallet or create if doesn't exist"""
-        wallet = self.db.query(Wallet).filter(Wallet.user_id == user_id).first()
+    def get_or_create_wallet(
+        self,
+        user_id: int,
+        company_id: int = 1,
+        currency: str | None = None,
+    ) -> Wallet:
+        """Get user's wallet or create if doesn't exist (scoped by company + user)."""
+        scope = ExpenseScope(user_id=user_id, company_id=company_id, currency=currency)
+        wallet = self.db.query(Wallet).filter(wallet_owner_clause(scope)).first()
         if not wallet:
             now = datetime.utcnow()
             wallet = Wallet(
                 user_id=user_id,
+                company_id=company_id,
                 balance=0.0,
                 total_income=0.0,
                 total_expense=0.0,
@@ -22,10 +31,16 @@ class WalletService:
             self.db.commit()
             self.db.refresh(wallet)
         return wallet
+
+    def get_or_create_wallet_for_scope(self, scope: ExpenseScope) -> Wallet:
+        return self.get_or_create_wallet(
+            scope.user_id, scope.company_id, scope.currency
+        )
     
     def update_wallet_balance(self, user_id: int, expense: Expense):
-        """Update wallet balance when expense is approved"""
-        wallet = self.get_or_create_wallet(user_id)
+        """Update wallet balance when expense is approved."""
+        company_id = getattr(expense, "company_id", None) or 1
+        wallet = self.get_or_create_wallet(user_id, company_id)
         
         # Check if already processed
         existing_transaction = self.db.query(WalletTransaction).filter(

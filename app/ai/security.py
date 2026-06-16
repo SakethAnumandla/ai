@@ -5,6 +5,7 @@ from fastapi import HTTPException, status
 
 from app.ai.sanitization import sanitize_prompt
 from app.ai.schemas.common import TenantUserContext, SessionContext
+from app.deps.scope import ExpenseScope
 from app.models import User
 
 # Keys that must never be persisted in audit payloads
@@ -30,7 +31,10 @@ def resolve_tenant_id(user: User) -> int:
 
 
 def build_tenant_context(user: User) -> TenantUserContext:
-    return TenantUserContext(tenant_id=resolve_tenant_id(user), user_id=user.id)
+    company_id = int(getattr(user, "company_id", None) or resolve_tenant_id(user))
+    return TenantUserContext(
+        tenant_id=company_id, user_id=user.id, company_id=company_id
+    )
 
 
 def build_session_context(user: User, session_id: str) -> SessionContext:
@@ -38,8 +42,100 @@ def build_session_context(user: User, session_id: str) -> SessionContext:
     return SessionContext(
         tenant_id=base.tenant_id,
         user_id=base.user_id,
+        company_id=base.scoped_company_id,
         session_id=session_id,
     )
+
+
+def build_session_context_from_scope(scope: ExpenseScope, session_id: str) -> SessionContext:
+    return SessionContext(
+        tenant_id=scope.company_id,
+        user_id=scope.user_id,
+        company_id=scope.company_id,
+        session_id=session_id,
+    )
+
+
+def scoped_company_id(
+    ctx: SessionContext, user: Optional[User] = None
+) -> int:
+    if user is not None and getattr(user, "company_id", None) is not None:
+        return int(user.company_id)
+    return int(getattr(ctx, "company_id", None) or ctx.tenant_id)
+
+
+def tenant_user_from_ctx(ctx: SessionContext) -> TenantUserContext:
+    """Tenant + user identity for AI persistence (tenant_id == company_id)."""
+    company_id = scoped_company_id(ctx)
+    return TenantUserContext(
+        tenant_id=company_id,
+        user_id=ctx.user_id,
+        company_id=company_id,
+    )
+
+
+def assert_chat_session_access(
+    db,
+    *,
+    company_id: int,
+    user_id: int,
+    session_id: str,
+) -> None:
+    """
+    Reject session_id values that belong to another company or user.
+
+    New session IDs (not yet used) are allowed so clients can generate UUIDs locally.
+    """
+    from sqlalchemy import or_
+
+    from app.ai.models.entities import AIConversation, AIMemory
+    from app.models import AIChatSession
+
+    foreign = or_(
+        AIChatSession.tenant_id != company_id,
+        AIChatSession.user_id != user_id,
+    )
+    if (
+        db.query(AIChatSession.id)
+        .filter(AIChatSession.session_id == session_id, foreign)
+        .limit(1)
+        .first()
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Chat session not accessible for this company and user",
+        )
+
+    foreign_conv = or_(
+        AIConversation.tenant_id != company_id,
+        AIConversation.user_id != user_id,
+    )
+    if (
+        db.query(AIConversation.id)
+        .filter(AIConversation.session_id == session_id, foreign_conv)
+        .limit(1)
+        .first()
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Chat session not accessible for this company and user",
+        )
+
+    suffix = f":{session_id}"
+    foreign_mem = or_(
+        AIMemory.tenant_id != company_id,
+        AIMemory.user_id != user_id,
+    )
+    if (
+        db.query(AIMemory.id)
+        .filter(AIMemory.memory_key.like(f"%{suffix}"), foreign_mem)
+        .limit(1)
+        .first()
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Chat session not accessible for this company and user",
+        )
 
 
 def assert_resource_owner(

@@ -87,7 +87,7 @@ class WorkflowRecoveryService:
             if user_text and self._should_skip_ambiguous_draft_prompt(user_text, intent):
                 return WorkflowRecoveryAssessment(scenario=WorkflowRecoveryScenario.NONE)
 
-            db_draft = self._latest_db_draft(ctx.user_id)
+            db_draft = self._latest_db_draft(ctx.user_id, ctx.scoped_company_id)
             if db_draft and self._draft_is_stale(db_draft):
                 return WorkflowRecoveryAssessment(
                     scenario=WorkflowRecoveryScenario.AMBIGUOUS_DRAFT,
@@ -127,10 +127,14 @@ class WorkflowRecoveryService:
             return True
         return False
 
-    def _latest_db_draft(self, user_id: int) -> Optional[Expense]:
+    def _latest_db_draft(self, user_id: int, company_id: int) -> Optional[Expense]:
         return (
             self._db.query(Expense)
-            .filter(Expense.user_id == user_id, Expense.status == ExpenseStatus.DRAFT)
+            .filter(
+                Expense.user_id == user_id,
+                Expense.company_id == company_id,
+                Expense.status == ExpenseStatus.DRAFT,
+            )
             .order_by(Expense.updated_at.desc())
             .first()
         )

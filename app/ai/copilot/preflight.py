@@ -115,7 +115,9 @@ class CopilotPreflight:
             out.intercept_message = continuity.message
             return out
 
-        resolved = self._resolver.resolve(user.id, user_content)
+        resolved = self._resolver.resolve(
+            user.id, user_content, company_id=getattr(user, "company_id", None) or 1
+        )
         out.resolved = resolved
         prefill = resolved.apply_to_slots({})
 

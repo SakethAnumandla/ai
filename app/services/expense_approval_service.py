@@ -151,10 +151,14 @@ def first_pending_approval_step(expense: Expense) -> Optional[ExpenseApproval]:
     return next((s for s in steps if s.status == ApprovalStatus.PENDING), None)
 
 
-def user_can_act_on_step(db: Session, user: User, step: ExpenseApproval) -> bool:
+def user_can_act_on_step(
+    db: Session, user: User, step: ExpenseApproval, *, company_scoped: bool = False
+) -> bool:
     """Whether [user] may approve/reject this workflow step now."""
     if step.status != ApprovalStatus.PENDING:
         return False
+    if company_scoped:
+        return True
     # Local dev: default user acts as stand-in for directory approvers (IDs 101, 201, …).
     if user.username == DEV_USER_USERNAME:
         return True
@@ -375,7 +379,10 @@ def process_expense_approval(
 
     now = datetime.now(timezone.utc)
     actor = user or (db.query(User).filter(User.id == expense.user_id).first())
-    if actor and not user_can_act_on_step(db, actor, step):
+    company_scoped = bool(actor and actor.id != expense.user_id)
+    if actor and not user_can_act_on_step(
+        db, actor, step, company_scoped=company_scoped
+    ):
         raise ValueError("You are not authorized to act on this approval step")
 
     if action == "approve":
@@ -450,37 +457,40 @@ def approve_expense_current_step(
     )
 
 
-def list_pending_for_user(db: Session, user_id: int) -> List[ExpenseApproval]:
+def list_pending_for_user(
+    db: Session, user_id: int, company_id: Optional[int] = None
+) -> List[ExpenseApproval]:
     """One actionable pending step per expense (L1 before L2)."""
     user = db.query(User).filter(User.id == user_id).first()
-    if not user:
-        return []
 
-    expenses = (
+    expenses_q = (
         db.query(Expense)
         .options(joinedload(Expense.approval_steps))
         .filter(Expense.status.in_((ExpenseStatus.SUBMITTED, ExpenseStatus.PENDING)))
-        .order_by(Expense.updated_at.desc())
-        .all()
     )
+    if company_id is not None:
+        expenses_q = expenses_q.filter(Expense.company_id == company_id)
+    expenses = expenses_q.order_by(Expense.updated_at.desc()).all()
     out: List[ExpenseApproval] = []
     for expense in expenses:
         pending = first_pending_approval_step(expense)
-        if pending and user_can_act_on_step(db, user, pending):
+        if not pending:
+            continue
+        if user and user_can_act_on_step(db, user, pending, company_scoped=company_id is not None):
+            out.append(pending)
+        elif company_id is not None and not user:
             out.append(pending)
     return out
 
 
-def pending_approval_groups_for_user(db: Session, user_id: int) -> List[Dict[str, Any]]:
+def pending_approval_groups_for_user(
+    db: Session, user_id: int, company_id: Optional[int] = None
+) -> List[Dict[str, Any]]:
     """Grouped pending queue with full chain + progress for the approval screen."""
-    user = db.query(User).filter(User.id == user_id).first()
-    if not user:
-        return []
-
     from app.utils.expense_helpers import submitted_by_display
 
     groups: List[Dict[str, Any]] = []
-    for step in list_pending_for_user(db, user_id):
+    for step in list_pending_for_user(db, user_id, company_id=company_id):
         expense = (
             db.query(Expense)
             .options(joinedload(Expense.approval_steps))
@@ -533,11 +543,13 @@ def pending_approval_groups_for_user(db: Session, user_id: int) -> List[Dict[str
     return groups
 
 
-def build_pending_expense_approval_queue(db: Session, user_id: int) -> Dict[str, Any]:
+def build_pending_expense_approval_queue(
+    db: Session, user_id: int, company_id: Optional[int] = None
+) -> Dict[str, Any]:
     """Flat + grouped pending queue payload for GET /expenses/approvals/pending."""
     from app.data.business_taxonomy import APPROVER_DIRECTORY
 
-    groups = pending_approval_groups_for_user(db, user_id)
+    groups = pending_approval_groups_for_user(db, user_id, company_id=company_id)
     flat: List[Dict[str, Any]] = []
     for group in groups:
         for step in group.get("steps") or []:

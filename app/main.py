@@ -56,6 +56,9 @@ async def _run_startup_init() -> None:
 
         await loop.run_in_executor(None, _migrate_business)
         await loop.run_in_executor(None, _migrate_submitted_by)
+        from app.migrations.add_expense_company_scope import run as _migrate_company_scope
+
+        await loop.run_in_executor(None, _migrate_company_scope)
     except Exception as exc:
         logger.warning("business_fields_migration: %s", exc)
 

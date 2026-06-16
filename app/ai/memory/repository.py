@@ -37,7 +37,7 @@ class AIRepository:
             safe_content = sanitize_response(message.content)
 
         row = AIConversation(
-            tenant_id=ctx.tenant_id,
+            tenant_id=ctx.scoped_company_id,
             user_id=ctx.user_id,
             session_id=ctx.session_id,
             role=message.role.value,
@@ -60,7 +60,7 @@ class AIRepository:
         existing = (
             self.db.query(AIChatSession)
             .filter(
-                AIChatSession.tenant_id == ctx.tenant_id,
+                AIChatSession.tenant_id == ctx.scoped_company_id,
                 AIChatSession.user_id == ctx.user_id,
                 AIChatSession.session_id == ctx.session_id,
             )
@@ -74,7 +74,7 @@ class AIRepository:
         else:
             self.db.add(
                 AIChatSession(
-                    tenant_id=ctx.tenant_id,
+                    tenant_id=ctx.scoped_company_id,
                     user_id=ctx.user_id,
                     session_id=ctx.session_id,
                     title=title or "Expense chat",
@@ -92,7 +92,7 @@ class AIRepository:
         return (
             self.db.query(AIConversation)
             .filter(
-                AIConversation.tenant_id == ctx.tenant_id,
+                AIConversation.tenant_id == ctx.scoped_company_id,
                 AIConversation.user_id == ctx.user_id,
                 AIConversation.session_id == ctx.session_id,
             )
@@ -210,7 +210,7 @@ class AIRepository:
             safe_summary = summary_text
 
         row = AISummary(
-            tenant_id=ctx.tenant_id,
+            tenant_id=ctx.scoped_company_id,
             user_id=ctx.user_id,
             session_id=ctx.session_id,
             summary_text=safe_summary,
@@ -257,9 +257,10 @@ class AIRepository:
 
     def delete_session_scoped_memories(self, ctx: SessionContext) -> int:
         """Delete draft/intent/workflow rows stored under this session_id."""
+        company_id = ctx.scoped_company_id
         suffix = f":{ctx.session_id}"
         q = self.db.query(AIMemory).filter(
-            AIMemory.tenant_id == ctx.tenant_id,
+            AIMemory.tenant_id == company_id,
             AIMemory.user_id == ctx.user_id,
             AIMemory.memory_key.like(f"%{suffix}"),
         )
@@ -272,7 +273,7 @@ class AIRepository:
         return (
             self.db.query(AISummary)
             .filter(
-                AISummary.tenant_id == ctx.tenant_id,
+                AISummary.tenant_id == ctx.scoped_company_id,
                 AISummary.user_id == ctx.user_id,
                 AISummary.session_id == ctx.session_id,
             )
