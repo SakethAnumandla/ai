@@ -163,6 +163,29 @@ def format_field_label(key: str) -> str:
     return key.replace("_", " ").strip().title()
 
 
+def format_bill_date_display(val: Any) -> str:
+    """Human-readable bill date for chat preview cards (DD/MM/YYYY)."""
+    from datetime import datetime
+
+    if val is None or val == "":
+        return ""
+    if hasattr(val, "strftime"):
+        return val.strftime("%d/%m/%Y")
+    raw = str(val).strip()
+    if raw.endswith("Z"):
+        raw = raw[:-1] + "+00:00"
+    try:
+        return datetime.fromisoformat(raw.replace("Z", "+00:00")).strftime("%d/%m/%Y")
+    except ValueError:
+        pass
+    for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y"):
+        try:
+            return datetime.strptime(raw[:10], fmt).strftime("%d/%m/%Y")
+        except ValueError:
+            continue
+    return raw
+
+
 def build_fields_from_prefill(prefill: Dict[str, Any]) -> List[ExpenseFieldPreview]:
     mapping = [
         ("vendor_name", "vendor_name", "Merchant"),
@@ -188,8 +211,8 @@ def build_fields_from_prefill(prefill: Dict[str, Any]) -> List[ExpenseFieldPrevi
             display = f"{float(val):,.2f}" if val else None
         elif key == "tax_amount":
             display = f"{float(val):,.2f}" if val is not None else None
-        elif key in ("bill_date",) and hasattr(val, "isoformat"):
-            display = val.isoformat()
+        elif key == "bill_date":
+            display = format_bill_date_display(val)
         else:
             display = str(val).replace("_", " ").title() if key.endswith("category") else str(val)
         fields.append(

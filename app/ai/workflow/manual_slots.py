@@ -414,9 +414,9 @@ def try_fill_manual_slot(
 
     if slot == "bill_date":
         if _TODAY_RE.match(stripped):
-            from datetime import datetime
+            from datetime import datetime, timezone
 
-            return datetime.utcnow().date().isoformat(), None
+            return datetime.now(timezone.utc).date().isoformat(), None
         try:
             from app.utils.date_parser import parse_bill_date
 

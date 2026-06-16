@@ -1,14 +1,23 @@
 """Attach receipt files to an in-chat manual workflow draft without OCR."""
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Optional, Tuple
 
 from sqlalchemy.orm import Session
 
 from app.ai.chat_ui import build_workflow_preview_card
-from app.ai.conversation.state_machine import ConversationStateMachine, slot_question
-from app.ai.schemas.chat_ui import CategoryPickerPayload, ExpensePreviewCard
+from app.ai.conversation.state_machine import (
+    ConversationStateMachine,
+    _GOT_IT_AFTER_ATTACHMENT,
+    _SUBMIT_CONFIRM_SLOT,
+    slot_question,
+)
+from app.ai.schemas.chat_ui import (
+    CategoryPickerPayload,
+    ExpensePreviewCard,
+    workflow_summary_actions,
+)
 from app.ai.schemas.workflow import ConversationWorkflowState
 from app.ai.workflow.draft_persist import persist_workflow_draft
 from app.ai.workflow.manual_slots import build_category_picker, category_ui_actions
@@ -65,7 +74,7 @@ def attach_receipt_to_manual_workflow(
     state.slots.pop(_MANUAL_ATTACHMENT_SLOT, None)
     state.slots["_attachment_complete"] = True
     state.slots["_bill_attached"] = True
-    state.updated_at = datetime.utcnow()
+    state.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
 
     sm = ConversationStateMachine()
     state.pending_slots = sm._recompute_pending_slots(state.slots)
@@ -75,17 +84,16 @@ def attach_receipt_to_manual_workflow(
     category_picker = None
     ui_actions = None
     if next_slot:
-        message = f"Receipt saved ✅ {slot_question(next_slot, slots=state.slots)}"
+        message = f"Bill attached ✅ {slot_question(next_slot, slots=state.slots)}"
         if next_slot in ("main_category", "sub_category", "line_item"):
             category_picker = build_category_picker(next_slot, slots=state.slots)
             ui_actions = category_ui_actions(next_slot, slots=state.slots)
     else:
-        from app.config import settings
-
-        save_label = "Save expense" if settings.expense_self_auto_approve_enabled else "Submit for approval"
-        message = (
-            f"Your receipt has been saved. Review the details below, "
-            f"then tap **Edit** or **{save_label}**."
-        )
+        state.slots[_SUBMIT_CONFIRM_SLOT] = True
+        message = _GOT_IT_AFTER_ATTACHMENT
+        if preview:
+            ui_actions = list(preview.actions)
+        else:
+            ui_actions = workflow_summary_actions(int(expense_id))
 
     return state, preview, message, category_picker, ui_actions

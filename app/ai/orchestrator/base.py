@@ -807,6 +807,10 @@ class AIOrchestrator:
             extra = {}
             if result.ui_actions:
                 extra["ui_actions"] = result.ui_actions
+                extra["attachments_enabled"] = any(
+                    getattr(a, "action", None) == "attach"
+                    for a in result.ui_actions
+                )
             if result.expense_previews:
                 extra["expense_previews"] = result.expense_previews
             if getattr(result, "category_picker", None):

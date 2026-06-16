@@ -1,7 +1,7 @@
 """Persist in-chat manual workflow slots as a DRAFT expense row."""
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional, Tuple
 
 from sqlalchemy.orm import Session
@@ -111,10 +111,11 @@ def persist_workflow_draft(
         else (getattr(user, "company_id", None) or 1)
     )
 
-    parsed_date = datetime.utcnow()
+    parsed_date = datetime.now(timezone.utc).replace(tzinfo=None)
     if tool_args.get("bill_date"):
         try:
-            parsed_date = parse_bill_date(str(tool_args["bill_date"]))
+            parsed = parse_bill_date(str(tool_args["bill_date"]))
+            parsed_date = parsed.replace(tzinfo=None) if parsed.tzinfo else parsed
         except Exception:
             pass
 

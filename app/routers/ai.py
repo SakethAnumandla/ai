@@ -10,7 +10,7 @@ from app.ai.chat_attachments import (
     build_chat_attachment_bundle,
     build_chat_attachment_bundle_from_file_infos,
 )
-from app.ai.conversation.state_machine import ConversationStateMachine
+from app.ai.conversation.state_machine import ConversationStateMachine, _GOT_IT_AFTER_ATTACHMENT
 from app.ai.dependencies import (
     get_ai_memory_service,
     get_ai_orchestrator,
@@ -66,18 +66,35 @@ def _guard_session(db: Session, scope: ExpenseScope, session_id: str) -> None:
     )
 
 
+def _attachments_enabled(
+    ui_actions: Optional[List[ChatUIAction]] = None,
+    *,
+    explicit: bool = False,
+) -> bool:
+    if explicit:
+        return True
+    if ui_actions:
+        return any(a.action == "attach" for a in ui_actions)
+    return False
+
+
 def _build_chat_response(
     result: dict,
     *,
     expense_previews: Optional[List[ExpensePreviewCard]] = None,
     ui_actions: Optional[List[ChatUIAction]] = None,
-    attachments_enabled: bool = False,
+    attachments_enabled: Optional[bool] = None,
     category_picker: Optional[CategoryPickerPayload] = None,
 ) -> ChatResponse:
     msg = result["message"]
     actions = list(ui_actions) if ui_actions else None
     if actions is not None and not actions:
         actions = None
+    attach_flag = (
+        attachments_enabled
+        if attachments_enabled is not None
+        else _attachments_enabled(actions)
+    )
     return ChatResponse(
         message=(
             msg
@@ -91,7 +108,7 @@ def _build_chat_response(
         requires_confirmation=bool(result.get("requires_confirmation")),
         confirmation_token=result.get("confirmation_token"),
         tool_results=result.get("tool_results"),
-        attachments_enabled=attachments_enabled,
+        attachments_enabled=attach_flag,
         expense_previews=expense_previews,
         ui_actions=actions,
         category_picker=category_picker or result.get("category_picker"),
@@ -155,6 +172,7 @@ async def ai_chat(
         result,
         expense_previews=result.get("expense_previews"),
         ui_actions=result.get("ui_actions"),
+        attachments_enabled=result.get("attachments_enabled"),
         category_picker=result.get("category_picker"),
     )
 
@@ -214,7 +232,10 @@ async def ai_chat_with_attachments(
     workflow_state = await memory.get_workflow_state(ctx)
     merge_into_workflow = bool(
         workflow_state is not None
-        and workflow_state.slots.get("creation_mode") == "manual"
+        and (
+            workflow_state.slots.get("creation_mode") == "manual"
+            or workflow_state.slots.get("_awaiting_attachment")
+        )
     )
 
     if merge_into_workflow:
@@ -243,7 +264,7 @@ async def ai_chat_with_attachments(
                 },
             ),
         )
-        user_persist = message.strip() or "[Receipt attached]"
+        user_persist = message.strip() or "Bill attached"
         await orchestrator.store_memory(
             ctx,
             ConversationMessageCreate(role=ConversationRole.USER, content=user_persist),
@@ -279,12 +300,22 @@ async def ai_chat_with_attachments(
     if scan.results:
         await memory.clear_workflow_state(ctx)
         await memory.clear_pending_intent(ctx)
-        intent_message = scan.intent_message
-        persist_message = scan.persist_message
-        llm_user_content = merge_multimodal_with_draft_context(
-            bundle.llm_user_content,
-            str(scan.llm_user_content),
+        user_persist = message.strip() or "Bill attached"
+        await orchestrator.store_memory(
+            ctx,
+            ConversationMessageCreate(role=ConversationRole.USER, content=user_persist),
         )
+        assistant_msg = await orchestrator.store_memory(
+            ctx,
+            ConversationMessageCreate(
+                role=ConversationRole.ASSISTANT,
+                content=_GOT_IT_AFTER_ATTACHMENT,
+            ),
+        )
+        card_actions: List[ChatUIAction] = []
+        if expense_previews:
+            for card in expense_previews:
+                card_actions.extend(card.actions)
         scan_tool_results = [
             {
                 "tool": "receipt_vision_scan",
@@ -293,6 +324,15 @@ async def ai_chat_with_attachments(
             }
             for r in scan.results
         ]
+        return _build_chat_response(
+            {
+                "message": assistant_msg,
+                "session_id": session_id,
+                "tool_results": scan_tool_results,
+            },
+            expense_previews=expense_previews,
+            ui_actions=card_actions or None,
+        )
     elif scan.errors:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
