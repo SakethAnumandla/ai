@@ -2,7 +2,7 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
-from app.ai.schemas.chat_ui import ChatUIAction, ExpensePreviewCard
+from app.ai.schemas.chat_ui import ChatUIAction, ExpensePreviewCard, CategoryPickerPayload
 from app.ai.schemas.classification import ResponseClassificationOut
 from app.ai.schemas.conversation import ConversationMessageOut
 
@@ -27,3 +27,4 @@ class ChatResponse(BaseModel):
     )
     expense_previews: Optional[List[ExpensePreviewCard]] = None
     ui_actions: Optional[List[ChatUIAction]] = None
+    category_picker: Optional[CategoryPickerPayload] = None

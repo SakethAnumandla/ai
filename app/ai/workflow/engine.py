@@ -33,6 +33,7 @@ class WorkflowContinueResult:
     execute_arguments: Dict[str, Any] = field(default_factory=dict)
     ui_actions: Optional[List[Any]] = None
     expense_previews: Optional[List[Any]] = None
+    category_picker: Optional[Any] = None
 
 
 class WorkflowEngine:
@@ -317,6 +318,7 @@ class WorkflowEngine:
                 message=sm_result.assistant_message,
                 ui_actions=sm_result.ui_actions,
                 expense_previews=[preview] if preview else None,
+                category_picker=getattr(sm_result, "category_picker", None),
             )
 
         if sm_result.updated_state and not sm_result.updated_state.pending_slots:
@@ -325,6 +327,7 @@ class WorkflowEngine:
                 message=format_draft_summary(sm_result.updated_state.slots),
                 ui_actions=sm_result.ui_actions,
                 expense_previews=[preview] if preview else None,
+                category_picker=getattr(sm_result, "category_picker", None),
             )
 
         return WorkflowContinueResult(handled=False)

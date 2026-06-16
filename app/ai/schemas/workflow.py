@@ -95,6 +95,7 @@ class StateMachineResult(BaseModel):
     clear_state: bool = False
     ui_actions: Optional[List[Any]] = None
     sync_draft: bool = False
+    category_picker: Optional[Any] = None
 
 
 class ContinuityResult(BaseModel):

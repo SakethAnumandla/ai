@@ -78,7 +78,7 @@ def _build_confirmation_summary(tool_name: str, arguments: Dict[str, Any]) -> st
     if tool_name == "reimbursement.submit.v1":
         return (
             f"I found a reimbursement for claim #{arguments.get('claim_id')} "
-            f"(₹{arguments.get('amount', '?')}). Do you want me to submit it?"
+            f"({arguments.get('amount', '?')}). Do you want me to submit it?"
         )
     if tool_name == "expense.delete.v1":
         return f"I can delete expense #{arguments.get('expense_id')}. Do you want me to proceed?"
@@ -381,7 +381,7 @@ class AIOrchestrator:
                 draft = await self._memory.get_draft_expense(ctx)
                 draft_hint = None
                 if draft and draft.bill_name:
-                    draft_hint = f"{draft.bill_name} ₹{draft.bill_amount or '?'}"
+                    draft_hint = f"{draft.bill_name} {draft.bill_amount or '?'}"
                 pending_summary = pending.summary_message if pending else None
 
                 ref_ctx = preflight.reference_context
@@ -765,6 +765,8 @@ class AIOrchestrator:
                 extra["ui_actions"] = result.ui_actions
             if result.expense_previews:
                 extra["expense_previews"] = result.expense_previews
+            if getattr(result, "category_picker", None):
+                extra["category_picker"] = result.category_picker
             return await self._finalize_chat(
                 ctx,
                 user,

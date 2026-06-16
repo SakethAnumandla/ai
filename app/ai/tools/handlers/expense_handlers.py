@@ -36,13 +36,10 @@ from app.services.expense_approval_service import (
 from app.utils.dashboard_queries import expense_status_display
 from app.schemas import ExpenseCreate, ExpenseUpdate
 from app.services.expense_service import ExpenseService
-def _money_label(amount: float, currency: Optional[str]) -> str:
-    code = (currency or "EUR").upper()
-    if code == "EUR":
-        return f"€{amount:,.2f}"
-    if code == "INR":
-        return f"₹{amount:,.2f}"
-    return f"{code} {amount:,.2f}"
+def _money_label(amount: float, currency: Optional[str] = None) -> str:
+    if amount == int(amount):
+        return f"{int(amount):,}"
+    return f"{amount:,.2f}"
 
 
 def _parse_category(value: Optional[str]) -> MainCategory:
@@ -512,7 +509,7 @@ async def handle_expense_delete_v1(
     label = expense.vendor_name or expense.bill_name
     svc.delete_expense(expense_id, user.id)
     return ToolResult.ok(
-        message=f"Deleted expense #{expense_id} ({label}, {_money_label(expense.bill_amount, expense.currency_code)}).",
+        message=f"Deleted expense #{expense_id} ({label}, {_money_label(expense.bill_amount)}).",
         data={"expense_id": expense_id},
     )
 
@@ -542,13 +539,11 @@ def _load_expense_for_user(db: Session, user: User, expense_id: int) -> Optional
 
 
 def _expense_status_payload(expense: Expense) -> Dict[str, Any]:
-    currency = expense.currency_code or "EUR"
-    return {
+    payload: Dict[str, Any] = {
         "expense_id": expense.id,
         "expense_id_label": f"EXP-{expense.id:04d}",
         "bill_name": expense.bill_name,
         "bill_amount": expense.bill_amount,
-        "currency_code": currency,
         "vendor_name": expense.vendor_name,
         "status": expense_status_display(expense.status),
         "raw_status": expense.status.value if expense.status else None,
@@ -558,6 +553,9 @@ def _expense_status_payload(expense: Expense) -> Dict[str, Any]:
         "bill_date": expense.bill_date.isoformat() if expense.bill_date else None,
         "progress": get_workflow_progress(expense),
     }
+    if expense.currency_code:
+        payload["currency_code"] = expense.currency_code
+    return payload
 
 
 async def handle_expense_get_v1(
@@ -574,7 +572,7 @@ async def handle_expense_get_v1(
     payload = _expense_status_payload(expense)
     label = payload["expense_id_label"]
     status = payload["status"]
-    amount = _money_label(expense.bill_amount, expense.currency_code)
+    amount = _money_label(expense.bill_amount)
     return ToolResult.ok(
         message=f"{label} — {expense.bill_name} ({amount}): {status}.",
         data=payload,
@@ -613,7 +611,6 @@ async def handle_expense_approval_pending_v1(
                 "sub_category": exp.sub_category,
                 "line_item": exp.line_item,
                 "amount": exp.bill_amount,
-                "currency_code": exp.currency_code or "EUR",
                 "bill_date": exp.bill_date.isoformat() if exp.bill_date else None,
                 "status": step.status.value if step.status else "pending",
                 "approval_level": step.approval_level,
@@ -629,7 +626,7 @@ async def handle_expense_approval_pending_v1(
         )
     lines = [
         f"• {p['expense_id_label']} — {p['description']} "
-        f"({_money_label(p['amount'], p['currency_code'])})"
+        f"({_money_label(p['amount'])})"
         for p in pending[:10]
     ]
     more = f" (+{len(pending) - 10} more)" if len(pending) > 10 else ""
@@ -671,7 +668,7 @@ async def handle_expense_approval_action_v1(
     return ToolResult.ok(
         message=(
             f"{verb} {payload['expense_id_label']} — {expense.bill_name} "
-            f"({_money_label(expense.bill_amount, expense.currency_code)}). "
+            f"({_money_label(expense.bill_amount)}). "
             f"Status: {payload['status']}."
         ),
         data={

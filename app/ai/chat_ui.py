@@ -67,7 +67,7 @@ def build_expense_preview_card(
         expense_id=expense.id,
         bill_name=expense.bill_name,
         bill_amount=expense.bill_amount,
-        currency_code=expense.currency_code or "EUR",
+        currency_code=expense.currency_code,
         vendor_name=expense.vendor_name,
         main_category=expense.main_category.value if expense.main_category else None,
         sub_category=expense.sub_category,
@@ -108,7 +108,7 @@ def format_preview_message(cards: List[ExpensePreviewCard]) -> str:
     if len(cards) == 1:
         c = cards[0]
         vendor = c.vendor_name or c.bill_name or "this bill"
-        amount = f"₹{c.bill_amount:,.2f}" if c.bill_amount else "the amount shown"
+        amount = f"{c.bill_amount:,.2f}" if c.bill_amount else "the amount shown"
         return (
             f"I've extracted details from **{vendor}** ({amount}). "
             "Preview your receipt below, review the fields, then **Submit** or **Edit**."
@@ -159,7 +159,7 @@ def build_workflow_preview_card(
         expense_id=expense.id,
         bill_name=expense.bill_name,
         bill_amount=expense.bill_amount,
-        currency_code=expense.currency_code or "EUR",
+        currency_code=expense.currency_code,
         vendor_name=expense.vendor_name,
         main_category=expense.main_category.value if expense.main_category else None,
         sub_category=expense.sub_category,

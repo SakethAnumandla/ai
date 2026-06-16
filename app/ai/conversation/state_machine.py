@@ -22,8 +22,9 @@ from app.ai.tools.argument_repair import _coerce_float, _coerce_int
 from app.ai.tools.expense_create_enrichment import bill_name_needs_repair
 from app.ai.expense_extraction import user_description_from_message
 from app.ai.workflow.entity_extractor import ExpenseEntityExtractor
-# sub_category is inferred for food (never asked) — avoids UPI/cash being misread as category
-_SLOT_ORDER = ["bill_amount", "vendor_name", "main_category", "payment_method"]
+# Legacy non-manual chat order (OCR / quick capture)
+_LEGACY_SLOT_ORDER = ["bill_amount", "vendor_name", "main_category", "payment_method"]
+_SLOT_ORDER = _LEGACY_SLOT_ORDER  # backwards compat alias
 
 _SLOT_QUESTIONS = {
     "bill_amount": "What was the amount?",
@@ -77,10 +78,53 @@ def normalize_workflow_pending_slots(fields: List[str]) -> List[str]:
     return list(dict.fromkeys(out))
 
 
-def slot_question(slot: str) -> str:
+def _is_manual(slots: Dict[str, Any]) -> bool:
+    return slots.get("creation_mode") == "manual"
+
+
+def _active_slot_order(slots: Dict[str, Any]) -> List[str]:
+    if _is_manual(slots):
+        from app.ai.workflow.manual_slots import manual_slot_order
+
+        return manual_slot_order()
+    return list(_LEGACY_SLOT_ORDER)
+
+
+def slot_question(slot: str, *, slots: Optional[Dict[str, Any]] = None) -> str:
+    if slots and _is_manual(slots):
+        from app.ai.workflow.manual_slots import slot_question as manual_q
+
+        return manual_q(slot)
     return _SLOT_QUESTIONS.get(
         slot,
         f"Could you confirm the {slot.replace('_', ' ')}?",
+    )
+
+
+def _prompt_for_slot(
+    state: ConversationWorkflowState,
+    slot: str,
+    *,
+    intro: Optional[str] = None,
+    sync_draft: bool = False,
+) -> StateMachineResult:
+    msg = slot_question(slot, slots=state.slots)
+    if intro:
+        msg = f"{intro} {msg}"
+    ui_actions = None
+    category_picker = None
+    if _is_manual(state.slots) and slot in ("main_category", "sub_category", "line_item"):
+        from app.ai.workflow.manual_slots import build_category_picker, category_ui_actions
+
+        category_picker = build_category_picker(slot, slots=state.slots)
+        ui_actions = category_ui_actions(slot, slots=state.slots)
+    return StateMachineResult(
+        handled=True,
+        assistant_message=msg,
+        updated_state=state,
+        ui_actions=ui_actions,
+        category_picker=category_picker,
+        sync_draft=sync_draft,
     )
 
 
@@ -160,18 +204,35 @@ _EDIT_TARGET_SLOT = "_edit_target_field"
 _MULTI_BILL_QUEUE_SLOT = "_multi_bill_queue"
 
 _EDIT_FIELD_LABELS = {
+    "bill_name": "Bill name",
     "vendor_name": "Vendor",
     "bill_amount": "Amount",
     "main_category": "Category",
+    "sub_category": "Sub-category",
+    "line_item": "Line item",
+    "tax_amount": "Tax",
+    "submitted_by_name": "Submitted by",
+    "submitted_by_role": "Role",
+    "bill_date": "Bill date",
     "payment_method": "Payment method",
     "description": "Description",
 }
 
 _EDIT_FIELD_ALIASES = {
+    "bill name": "bill_name",
+    "name": "bill_name",
     "vendor": "vendor_name",
     "merchant": "vendor_name",
     "amount": "bill_amount",
     "category": "main_category",
+    "sub category": "sub_category",
+    "subcategory": "sub_category",
+    "line item": "line_item",
+    "tax": "tax_amount",
+    "submitted by": "submitted_by_name",
+    "role": "submitted_by_role",
+    "date": "bill_date",
+    "bill date": "bill_date",
     "payment": "payment_method",
     "payment method": "payment_method",
     "description": "description",
@@ -191,8 +252,8 @@ _OCR_WAIT_MESSAGE = (
 )
 
 _MANUAL_ATTACHMENT_QUESTION = (
-    "Tap **Upload bill** below to attach your receipt (JPG, PNG, or PDF). "
-    "Reply **skip** if you don't have a receipt."
+    "Please attach your bill using **Upload bill** below (JPG, PNG, or PDF). "
+    "A receipt is required for manual expenses."
 )
 
 _UPLOAD_CHOICE_RE = re.compile(
@@ -292,9 +353,22 @@ class ConversationStateMachine:
         return any(p.search(text) for p in _CREATE_PATTERNS)
 
     def _recompute_pending_slots(self, slots: Dict[str, Any]) -> List[str]:
-        pending = [s for s in _SLOT_ORDER if slots.get(s) in (None, "", [])]
+        order = _active_slot_order(slots)
+        pending = [s for s in order if slots.get(s) in (None, "", [])]
         pending = self._maybe_require_sub_category(slots, pending)
         return [s for s in pending if slots.get(s) in (None, "", [])]
+
+    def _should_prompt_attachment(self, state: ConversationWorkflowState) -> bool:
+        s = state.slots
+        if not _is_manual(s):
+            return False
+        if s.get("_attachment_complete") or s.get(_MANUAL_ATTACHMENT_SLOT):
+            return False
+        if not s.get("main_category"):
+            return False
+        if not state.pending_slots:
+            return False
+        return state.pending_slots[0] == "sub_category"
 
     def _merge_entities_from_message(
         self,
@@ -318,23 +392,40 @@ class ConversationStateMachine:
 
         logger.info("EXTRACTED ENTITIES=%s", extracted)
 
+        manual = _is_manual(state.slots)
+        skip_autofill = {
+            "bill_name",
+            "bill_amount",
+            "vendor_name",
+            "main_category",
+            "sub_category",
+            "line_item",
+            "description",
+            "bill_date",
+            "tax_amount",
+            "submitted_by_name",
+            "submitted_by_role",
+        }
         for k, v in extracted.items():
             if v is not None and state.slots.get(k) in (None, "", []):
+                if manual and k in skip_autofill:
+                    continue
                 state.slots[k] = v
 
-        desc = user_description_from_message(text)
-        if desc and not state.slots.get("description"):
-            state.slots["description"] = desc
-        if entities.bill_name and not state.slots.get("description"):
-            state.slots["description"] = entities.bill_name
+        if not manual:
+            desc = user_description_from_message(text)
+            if desc and not state.slots.get("description"):
+                state.slots["description"] = desc
+            if entities.bill_name and not state.slots.get("description"):
+                state.slots["description"] = entities.bill_name
 
-        label = state.slots.get("bill_name")
-        if bill_name_needs_repair(label) and entities.bill_name:
-            state.slots["bill_name"] = entities.bill_name
-        elif bill_name_needs_repair(label) and state.slots.get("vendor_name"):
-            state.slots["bill_name"] = state.slots["vendor_name"]
+            label = state.slots.get("bill_name")
+            if bill_name_needs_repair(label) and entities.bill_name:
+                state.slots["bill_name"] = entities.bill_name
+            elif bill_name_needs_repair(label) and state.slots.get("vendor_name"):
+                state.slots["bill_name"] = state.slots["vendor_name"]
 
-        self._apply_food_sub_category_inference(state.slots)
+            self._apply_food_sub_category_inference(state.slots)
         state.pending_slots = self._recompute_pending_slots(state.slots)
         logger.info("WORKFLOW BEFORE QUESTION=%s", state.model_dump())
         logger.info("MISSING FIELDS=%s", state.pending_slots)
@@ -350,15 +441,17 @@ class ConversationStateMachine:
     ) -> ConversationWorkflowState:
         entities = ExpenseEntityExtractor().extract(text)
         multi_labels = _detect_multi_bill_labels(text)
-        label = _extract_expense_label(text) or entities.bill_name or "expense"
-        if multi_labels:
-            label = multi_labels[0]
-        if bill_name_needs_repair(label) and entities.bill_name:
-            label = entities.bill_name
         slots: Dict[str, Any] = {
-            "bill_name": label,
             "_source_utterance": text.strip(),
         }
+        mode = _detect_creation_mode(text) or (prefill or {}).get("creation_mode")
+        if mode != "manual":
+            label = _extract_expense_label(text) or entities.bill_name or "expense"
+            if multi_labels:
+                label = multi_labels[0]
+            if bill_name_needs_repair(label) and entities.bill_name:
+                label = entities.bill_name
+            slots["bill_name"] = label
         if prefill:
             for k, v in prefill.items():
                 if v is None:
@@ -378,7 +471,6 @@ class ConversationStateMachine:
         if multi_labels and len(multi_labels) > 1:
             slots[_MULTI_BILL_QUEUE_SLOT] = multi_labels[1:]
 
-        mode = _detect_creation_mode(text) or (prefill or {}).get("creation_mode")
         if mode:
             slots["creation_mode"] = mode
 
@@ -386,13 +478,16 @@ class ConversationStateMachine:
             workflow_type=WorkflowType.EXPENSE_CREATE,
             scope=WorkflowScope.EXPENSE,
             slots=slots,
-            pending_slots=list(_SLOT_ORDER),
+            pending_slots=_active_slot_order(slots),
             session_id=session_id,
         )
         self._merge_entities_from_message(state, text, entities=entities)
         if not mode and not prefill:
             state.slots[_CREATION_MODE_SLOT] = True
             state.pending_slots = []
+        elif mode == "manual":
+            state.slots.pop("bill_name", None)
+            state.pending_slots = self._recompute_pending_slots(state.slots)
         elif mode == "ocr":
             state.pending_slots = []
         return state
@@ -410,10 +505,10 @@ class ConversationStateMachine:
         if draft.fields_pending:
             pending = normalize_workflow_pending_slots(draft.fields_pending)
         else:
-            pending = [s for s in _SLOT_ORDER if slots.get(s) in (None, "")]
+            pending = [s for s in _active_slot_order(slots) if slots.get(s) in (None, "")]
         pending = [s for s in pending if slots.get(s) in (None, "")]
         if not pending:
-            pending = [s for s in _SLOT_ORDER if slots.get(s) in (None, "")]
+            pending = [s for s in _active_slot_order(slots) if slots.get(s) in (None, "")]
         return ConversationWorkflowState(
             workflow_type=WorkflowType.EXPENSE_CONTINUE,
             scope=WorkflowScope.EXPENSE,
@@ -448,6 +543,8 @@ class ConversationStateMachine:
     def _maybe_require_sub_category(
         self, slots: Dict[str, Any], pending: List[str]
     ) -> List[str]:
+        if _is_manual(slots):
+            return pending
         self._apply_food_sub_category_inference(slots)
         return [s for s in pending if s != "sub_category"]
 
@@ -456,6 +553,27 @@ class ConversationStateMachine:
     ) -> Optional[Any]:
         stripped = text.strip()
         ctx = slots or {}
+        if _is_manual(ctx):
+            from app.ai.workflow.manual_slots import (
+                resolve_main_categories,
+                try_fill_manual_slot,
+            )
+
+            if slot == "main_category":
+                cats = resolve_main_categories(stripped)
+                if cats:
+                    ctx["selected_categories"] = cats
+                    if len(cats) > 1:
+                        ctx["extra_category_tags"] = cats[1:]
+                    return cats[0]
+            val, _err = try_fill_manual_slot(slot, stripped, slots=ctx)
+            if slot == "description" and val is None:
+                from app.ai.workflow.manual_slots import _SKIP_RE
+
+                if _SKIP_RE.match(stripped):
+                    return ""
+            return val
+
         if slot == "bill_amount":
             val = _coerce_float(stripped)
             return val if val and val > 0 else None
@@ -493,6 +611,17 @@ class ConversationStateMachine:
         self, state: ConversationWorkflowState, text: str
     ) -> StateMachineResult:
         """All slots filled — ask to submit unless user already asked to submit now."""
+        if _is_manual(state.slots) and not state.slots.get("_attachment_complete"):
+            state.slots[_MANUAL_ATTACHMENT_SLOT] = True
+            from app.ai.schemas.chat_ui import attachment_prompt_actions
+
+            return StateMachineResult(
+                handled=True,
+                assistant_message=_MANUAL_ATTACHMENT_QUESTION,
+                updated_state=state,
+                ui_actions=attachment_prompt_actions(),
+                sync_draft=True,
+            )
         if self._wants_immediate_submit(text):
             return self._complete(state, submit_now=True)
         state.slots[_SUBMIT_CONFIRM_SLOT] = True
@@ -531,18 +660,19 @@ class ConversationStateMachine:
                 updated_state=state,
                 ui_actions=ocr_upload_actions(),
             )
+        state.slots.pop("bill_name", None)
         state.pending_slots = self._recompute_pending_slots(state.slots)
         next_slot = state.pending_slots[0] if state.pending_slots else None
-        intro = "Sure — let's enter the details manually."
+        intro = "Sure — let's enter the details manually, same as the manual bill form."
         if state.slots.get(_MULTI_BILL_QUEUE_SLOT):
             queue = state.slots[_MULTI_BILL_QUEUE_SLOT]
             if queue:
-                intro += f" We'll do **{state.slots.get('bill_name', 'expense')}** first, then **{queue[0]}**."
+                intro += f" We'll do **{queue[0]}** first."
+        if next_slot:
+            return _prompt_for_slot(state, next_slot, intro=intro)
         return StateMachineResult(
             handled=True,
-            assistant_message=(
-                f"{intro} {slot_question(next_slot)}" if next_slot else intro
-            ),
+            assistant_message=intro,
             updated_state=state,
         )
 
@@ -551,9 +681,6 @@ class ConversationStateMachine:
     ) -> Optional[StateMachineResult]:
         if not state.slots.get(_MANUAL_ATTACHMENT_SLOT):
             return None
-        if _SKIP_ATTACHMENT_RE.match((text or "").strip()):
-            state.slots.pop(_MANUAL_ATTACHMENT_SLOT, None)
-            return self._offer_submit_confirmation(state, text)
         from app.ai.schemas.chat_ui import attachment_prompt_actions
 
         return StateMachineResult(
@@ -561,6 +688,7 @@ class ConversationStateMachine:
             assistant_message=_MANUAL_ATTACHMENT_QUESTION,
             updated_state=state,
             ui_actions=attachment_prompt_actions(),
+            sync_draft=True,
         )
 
     def _handle_ocr_wait_reply(
@@ -584,14 +712,15 @@ class ConversationStateMachine:
         if mode == "manual":
             state.slots["creation_mode"] = "manual"
             state.slots.pop(_CREATION_MODE_SLOT, None)
+            state.slots.pop("bill_name", None)
             state.pending_slots = self._recompute_pending_slots(state.slots)
             next_slot = state.pending_slots[0] if state.pending_slots else None
-            intro = "Sure — let's enter the details manually."
+            intro = "Sure — let's enter the details manually, same as the manual bill form."
+            if next_slot:
+                return _prompt_for_slot(state, next_slot, intro=intro)
             return StateMachineResult(
                 handled=True,
-                assistant_message=(
-                    f"{intro} {slot_question(next_slot)}" if next_slot else intro
-                ),
+                assistant_message=intro,
                 updated_state=state,
             )
 
@@ -651,11 +780,7 @@ class ConversationStateMachine:
             )
         state.slots.pop(_EDIT_FIELD_SLOT, None)
         state.slots[_EDIT_TARGET_SLOT] = field
-        return StateMachineResult(
-            handled=True,
-            assistant_message=slot_question(field),
-            updated_state=state,
-        )
+        return _prompt_for_slot(state, field)
 
     def _handle_edit_value_reply(
         self, state: ConversationWorkflowState, text: str
@@ -674,7 +799,12 @@ class ConversationStateMachine:
             )
         state.slots[target] = value
         state.slots.pop(_EDIT_TARGET_SLOT, None)
-        self._apply_food_sub_category_inference(state.slots)
+        if _is_manual(state.slots):
+            from app.ai.workflow.manual_slots import normalize_slots_taxonomy
+
+            normalize_slots_taxonomy(state.slots)
+        else:
+            self._apply_food_sub_category_inference(state.slots)
         state.slots[_SUBMIT_CONFIRM_SLOT] = True
         from app.ai.workflow.draft_summary import format_draft_summary
 
@@ -727,7 +857,7 @@ class ConversationStateMachine:
                 )
             return StateMachineResult(
                 handled=True,
-                assistant_message=slot_question(next_slot) if next_slot else None,
+                assistant_message=slot_question(next_slot, slots=state.slots),
                 updated_state=state,
             )
 
@@ -803,24 +933,18 @@ class ConversationStateMachine:
                         text[:80],
                         state.slots,
                     )
-                    return StateMachineResult(
-                        handled=True,
-                        assistant_message=slot_question(slot),
-                        updated_state=state,
-                    )
+                    return _prompt_for_slot(state, slot)
                 break
-            state.fill_slot(slot, value)
-            self._apply_food_sub_category_inference(state.slots)
-            if not explicit_updates and len(text.split()) <= 6:
-                break
+            state.fill_slot(slot, value if value != "" else None)
+            if slot == "description" and value == "":
+                state.slots["description"] = None
+            if not _is_manual(state.slots):
+                self._apply_food_sub_category_inference(state.slots)
+            elif slot in ("main_category", "sub_category", "line_item"):
+                from app.ai.workflow.manual_slots import normalize_slots_taxonomy
 
-        if not state.pending_slots:
-            if (
-                state.slots.get("creation_mode") == "manual"
-                and not state.slots.get(_MANUAL_ATTACHMENT_SLOT)
-                and not state.slots.get("expense_id")
-                and state.slots.get("payment_method")
-            ):
+                normalize_slots_taxonomy(state.slots)
+            if self._should_prompt_attachment(state):
                 state.slots[_MANUAL_ATTACHMENT_SLOT] = True
                 from app.ai.schemas.chat_ui import attachment_prompt_actions
 
@@ -831,6 +955,10 @@ class ConversationStateMachine:
                     ui_actions=attachment_prompt_actions(),
                     sync_draft=True,
                 )
+            if not explicit_updates and len(text.split()) <= 6:
+                break
+
+        if not state.pending_slots:
             return self._offer_submit_confirmation(state, text)
 
         next_slot = state.pending_slots[0]
@@ -840,11 +968,7 @@ class ConversationStateMachine:
             state.pending_slots,
             state.slots,
         )
-        return StateMachineResult(
-            handled=True,
-            assistant_message=slot_question(next_slot),
-            updated_state=state,
-        )
+        return _prompt_for_slot(state, next_slot)
 
     def _complete(
         self, state: ConversationWorkflowState, *, submit_now: bool = False
@@ -869,6 +993,9 @@ class ConversationStateMachine:
             _MULTI_BILL_QUEUE_SLOT,
             "_source_utterance",
             "creation_mode",
+            "_attachment_complete",
+            "selected_categories",
+            "extra_category_tags",
         ):
             args.pop(internal, None)
         bill_name = args.pop("bill_name", "expense")
@@ -892,8 +1019,18 @@ class ConversationStateMachine:
             tool_args["payment_method"] = payment_method
         if sub:
             tool_args["sub_category"] = sub
+        if args.get("line_item"):
+            tool_args["line_item"] = args.get("line_item")
         if args.get("description"):
             tool_args["description"] = args["description"]
+        if args.get("bill_date"):
+            tool_args["bill_date"] = args.get("bill_date")
+        if args.get("tax_amount") is not None:
+            tool_args["tax_amount"] = args.get("tax_amount")
+        if args.get("submitted_by_name"):
+            tool_args["submitted_by_name"] = args.get("submitted_by_name")
+        if args.get("submitted_by_role"):
+            tool_args["submitted_by_role"] = args.get("submitted_by_role")
         if state.expense_id:
             tool_args["expense_id"] = state.expense_id
 

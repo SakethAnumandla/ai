@@ -7,14 +7,15 @@ from typing import List, Optional, Tuple
 from sqlalchemy.orm import Session
 
 from app.ai.chat_ui import build_workflow_preview_card
-from app.ai.schemas.chat_ui import ExpensePreviewCard, default_expense_card_actions
+from app.ai.conversation.state_machine import ConversationStateMachine, slot_question
+from app.ai.schemas.chat_ui import CategoryPickerPayload, ExpensePreviewCard
 from app.ai.schemas.workflow import ConversationWorkflowState
 from app.ai.workflow.draft_persist import persist_workflow_draft
+from app.ai.workflow.manual_slots import build_category_picker, category_ui_actions
 from app.models import Expense, User
 from app.utils.expense_helpers import attach_files_to_expense
 
 _MANUAL_ATTACHMENT_SLOT = "_awaiting_attachment"
-_SUBMIT_CONFIRM_SLOT = "_awaiting_submit_confirm"
 
 
 def attach_receipt_to_manual_workflow(
@@ -22,14 +23,20 @@ def attach_receipt_to_manual_workflow(
     user: User,
     workflow_state: ConversationWorkflowState,
     file_infos: List[dict],
-) -> Tuple[ConversationWorkflowState, Optional[ExpensePreviewCard], str]:
+) -> Tuple[
+    ConversationWorkflowState,
+    Optional[ExpensePreviewCard],
+    str,
+    Optional[CategoryPickerPayload],
+    Optional[list],
+]:
     """
     Save uploaded files on the existing manual draft expense (no vision scan).
-    Returns (updated_state, preview_card, assistant_message).
+    Returns (updated_state, preview_card, assistant_message, category_picker, ui_actions).
     """
     state, expense_id = persist_workflow_draft(db, user, workflow_state)
     if not expense_id:
-        raise ValueError("Complete expense details before uploading a receipt.")
+        raise ValueError("Complete bill name, amount, vendor, and category before uploading.")
 
     expense = (
         db.query(Expense)
@@ -45,15 +52,25 @@ def attach_receipt_to_manual_workflow(
     db.commit()
 
     state.slots.pop(_MANUAL_ATTACHMENT_SLOT, None)
-    state.slots[_SUBMIT_CONFIRM_SLOT] = True
+    state.slots["_attachment_complete"] = True
     state.updated_at = datetime.utcnow()
 
-    preview = build_workflow_preview_card(db, expense_id=int(expense_id), slots=state.slots)
-    if preview:
-        preview.actions = default_expense_card_actions(int(expense_id), status=preview.status)
+    sm = ConversationStateMachine()
+    state.pending_slots = sm._recompute_pending_slots(state.slots)
+    next_slot = state.pending_slots[0] if state.pending_slots else None
 
-    message = (
-        "Your receipt has been saved. Review the expense details below, "
-        "then tap **Edit** to change anything or **Submit for approval** when ready."
-    )
-    return state, preview, message
+    preview = build_workflow_preview_card(db, expense_id=int(expense_id), slots=state.slots)
+    category_picker = None
+    ui_actions = None
+    if next_slot:
+        message = f"Receipt saved ✅ {slot_question(next_slot, slots=state.slots)}"
+        if next_slot in ("main_category", "sub_category", "line_item"):
+            category_picker = build_category_picker(next_slot, slots=state.slots)
+            ui_actions = category_ui_actions(next_slot, slots=state.slots)
+    else:
+        message = (
+            "Your receipt has been saved. Review the details below, "
+            "then tap **Edit** or **Submit for approval**."
+        )
+
+    return state, preview, message, category_picker, ui_actions

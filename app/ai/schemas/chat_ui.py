@@ -9,11 +9,33 @@ from pydantic import BaseModel, Field
 class ChatUIAction(BaseModel):
     """Client-renderable action (button) in the chat thread."""
 
-    action: str = Field(..., description="submit | edit | delete | attach | skip | view_expense")
+    action: str = Field(
+        ...,
+        description="submit | edit | delete | attach | skip | view_expense | select_category",
+    )
     label: str
     expense_id: Optional[int] = None
     fields: List[str] = Field(default_factory=list)
     style: str = Field(default="secondary", description="primary | secondary | danger")
+
+
+class CategoryOption(BaseModel):
+    value: str
+    label: str
+    icon: Optional[str] = None
+
+
+class CategoryPickerPayload(BaseModel):
+    """Category hierarchy for chat manual expense (same data as GET /categories/manual)."""
+
+    step: str = Field(description="main | sub | line_item")
+    multi_select: bool = False
+    main_categories: List[CategoryOption] = Field(default_factory=list)
+    options: List[CategoryOption] = Field(default_factory=list)
+    selected: List[str] = Field(default_factory=list)
+    parent_main: Optional[str] = None
+    parent_sub: Optional[str] = None
+    hierarchy: Optional[Dict[str, Any]] = None
 
 
 class ExpenseFieldPreview(BaseModel):
@@ -29,7 +51,7 @@ class ExpensePreviewCard(BaseModel):
     expense_id: int
     bill_name: Optional[str] = None
     bill_amount: Optional[float] = None
-    currency_code: str = "EUR"
+    currency_code: Optional[str] = None
     vendor_name: Optional[str] = None
     main_category: Optional[str] = None
     sub_category: Optional[str] = None
@@ -99,10 +121,16 @@ def attachment_prompt_actions() -> List[ChatUIAction]:
 
 def edit_field_actions() -> List[ChatUIAction]:
     fields = [
+        ("bill_name", "Bill name"),
         ("vendor_name", "Vendor"),
         ("bill_amount", "Amount"),
         ("main_category", "Category"),
-        ("payment_method", "Payment"),
+        ("sub_category", "Sub-category"),
+        ("line_item", "Line item"),
+        ("tax_amount", "Tax"),
+        ("submitted_by_name", "Submitted by"),
+        ("submitted_by_role", "Role"),
+        ("bill_date", "Bill date"),
         ("description", "Description"),
     ]
     return [
@@ -144,7 +172,7 @@ def build_fields_from_prefill(prefill: Dict[str, Any]) -> List[ExpenseFieldPrevi
         if val is None or val == "":
             continue
         if key == "bill_amount":
-            display = f"₹{float(val):,.2f}" if val else None
+            display = f"{float(val):,.2f}" if val else None
         elif key in ("bill_date",) and hasattr(val, "isoformat"):
             display = val.isoformat()
         else:

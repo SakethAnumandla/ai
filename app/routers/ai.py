@@ -24,7 +24,7 @@ from app.ai.receipt_chat import (
 )
 from app.ai.schemas.chat import ChatRequest, ChatResponse
 from app.ai.schemas.memory import PendingIntent
-from app.ai.schemas.chat_ui import ChatUIAction, ExpensePreviewCard
+from app.ai.schemas.chat_ui import ChatUIAction, ExpensePreviewCard, CategoryPickerPayload
 from app.ai.models.entities import AIConversation, ConversationRole
 from app.ai.schemas.conversation import ConversationMessageCreate, ConversationMessageOut
 from app.ai.security import build_session_context, resolve_tenant_id
@@ -48,6 +48,7 @@ def _build_chat_response(
     expense_previews: Optional[List[ExpensePreviewCard]] = None,
     ui_actions: Optional[List[ChatUIAction]] = None,
     attachments_enabled: bool = False,
+    category_picker: Optional[CategoryPickerPayload] = None,
 ) -> ChatResponse:
     msg = result["message"]
     actions = list(ui_actions) if ui_actions else None
@@ -69,6 +70,7 @@ def _build_chat_response(
         attachments_enabled=attachments_enabled,
         expense_previews=expense_previews,
         ui_actions=actions,
+        category_picker=category_picker or result.get("category_picker"),
     )
 
 
@@ -80,6 +82,21 @@ def _upload_files_from_form(form) -> List[UploadFile]:
         if name:
             uploads.append(item)  # type: ignore[arg-type]
     return uploads
+
+
+@router.get("/chat/categories")
+async def ai_chat_categories(
+    user: User = Depends(get_current_user),
+):
+    """Category hierarchy for manual expense chat (same payload as GET /categories/manual)."""
+    from app.utils.category_hashtags import get_manual_categories_payload
+    from app.utils.payment_modes import list_payment_modes
+
+    payload = get_manual_categories_payload()
+    pm = list_payment_modes()
+    payload["payment_modes"] = pm["payment_modes"]
+    payload["default_payment_mode"] = pm["default"]
+    return payload
 
 
 @router.get("/chat/welcome", response_model=ChatResponse)
@@ -108,6 +125,7 @@ async def ai_chat(
         result,
         expense_previews=result.get("expense_previews"),
         ui_actions=result.get("ui_actions"),
+        category_picker=result.get("category_picker"),
     )
 
 
@@ -169,8 +187,10 @@ async def ai_chat_with_attachments(
 
     if merge_into_workflow:
         try:
-            updated_state, preview, preview_hint = attach_receipt_to_manual_workflow(
-                db, user, workflow_state, file_infos
+            updated_state, preview, preview_hint, category_picker, upload_actions = (
+                attach_receipt_to_manual_workflow(
+                    db, user, workflow_state, file_infos
+                )
             )
         except ValueError as exc:
             raise HTTPException(
@@ -200,7 +220,9 @@ async def ai_chat_with_attachments(
             ctx,
             ConversationMessageCreate(role=ConversationRole.ASSISTANT, content=preview_hint),
         )
-        card_actions = list(preview.actions) if preview else []
+        card_actions = list(upload_actions) if upload_actions else []
+        if preview and not updated_state.pending_slots:
+            card_actions = list(preview.actions)
         return _build_chat_response(
             {
                 "message": assistant_msg,
@@ -208,6 +230,7 @@ async def ai_chat_with_attachments(
             },
             expense_previews=[preview] if preview else None,
             ui_actions=card_actions or None,
+            category_picker=category_picker,
         )
 
     scan = await run_blocking(
