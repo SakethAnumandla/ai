@@ -72,14 +72,29 @@ class CompanyScope:
     )
 
 
+def _resolve_authorization(
+  authorization: Optional[str],
+  access_token: Optional[str],
+) -> Optional[str]:
+  if authorization and str(authorization).strip():
+    return authorization
+  if access_token and str(access_token).strip():
+    token = str(access_token).strip()
+    if token.lower().startswith("bearer "):
+      return token
+    return f"Bearer {token}"
+  return None
+
+
 async def get_expense_scope(
   authorization: Optional[str] = Header(None, alias="Authorization"),
+  access_token: Optional[str] = Query(None),
   user_id: Optional[int] = Query(None),
   company_id: Optional[int] = Query(None),
   country_currency: Optional[str] = Query(None, alias="country_currency"),
 ) -> ExpenseScope:
   scope = bizwy_client.resolve_user(
-    authorization,
+    _resolve_authorization(authorization, access_token),
     user_id=user_id,
     company_id=company_id,
     currency=country_currency,
@@ -89,12 +104,13 @@ async def get_expense_scope(
 
 async def get_company_scope(
   authorization: Optional[str] = Header(None, alias="Authorization"),
+  access_token: Optional[str] = Query(None),
   user_id: Optional[int] = Query(None),
   company_id: Optional[int] = Query(None),
   country_currency: Optional[str] = Query(None, alias="country_currency"),
 ) -> CompanyScope:
   scope = bizwy_client.resolve_user(
-    authorization,
+    _resolve_authorization(authorization, access_token),
     user_id=user_id,
     company_id=company_id,
     currency=country_currency,

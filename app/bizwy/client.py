@@ -104,8 +104,7 @@ class BizwyClient:
     ttl = max(30, int(settings.bizwy_token_cache_seconds))
     _CACHE[_cache_key(token)] = (time.monotonic() + ttl, scope)
 
-  def validate_token(self, authorization: str) -> BizwyScope:
-    token = _strip_bearer(authorization)
+  def _validate_token_remote(self, token: str) -> BizwyScope:
     cached = self._get_cached(token)
     if cached:
       return cached
@@ -159,6 +158,58 @@ class BizwyClient:
     self._set_cached(token, scope)
     return scope
 
+  def validate_token(self, authorization: str) -> BizwyScope:
+    token = _strip_bearer(authorization)
+    return self._validate_token_remote(token)
+
+  def _query_scope_available(
+    self,
+    *,
+    user_id: Optional[int],
+    company_id: Optional[int],
+  ) -> bool:
+    return user_id is not None and company_id is not None
+
+  def _assert_scope_matches_query(
+    self,
+    scope: BizwyScope,
+    *,
+    user_id: Optional[int],
+    company_id: Optional[int],
+  ) -> None:
+    if user_id is not None and int(user_id) != scope.user_id:
+      raise HTTPException(status.HTTP_403_FORBIDDEN, "user_id mismatch")
+    if company_id is not None and int(company_id) != scope.company_id:
+      raise HTTPException(status.HTTP_403_FORBIDDEN, "company_id mismatch")
+
+  def _resolve_from_query_with_mode(
+    self,
+    *,
+    user_id: Optional[int],
+    company_id: Optional[int],
+    currency: Optional[str],
+    mode: str,
+  ) -> BizwyScope:
+    if not self._query_scope_available(user_id=user_id, company_id=company_id):
+      if mode in {"dev", "hybrid"}:
+        raise HTTPException(
+          status_code=status.HTTP_400_BAD_REQUEST,
+          detail="user_id and company_id are required",
+        )
+      raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Missing Authorization header",
+      )
+    logger.info(
+      "bizwy.resolve_user query_scope mode=%s user_id=%s company_id=%s",
+      mode,
+      user_id,
+      company_id,
+    )
+    return self.resolve_from_query(
+      user_id=user_id, company_id=company_id, currency=currency
+    )
+
   def resolve_user(
     self,
     authorization: Optional[str],
@@ -167,22 +218,58 @@ class BizwyClient:
     company_id: Optional[int] = None,
     currency: Optional[str] = None,
   ) -> BizwyScope:
-    mode = (settings.bizwy_auth_mode or "token").strip().lower()
+    mode = (settings.bizwy_auth_mode or "hybrid").strip().lower()
     if mode == "dev":
       return self.resolve_from_query(
         user_id=user_id, company_id=company_id, currency=currency
       )
 
-    if not authorization:
+    has_auth = bool(authorization and str(authorization).strip())
+    has_query = self._query_scope_available(user_id=user_id, company_id=company_id)
+    allow_query_fallback = bool(settings.bizwy_token_query_fallback)
+
+    if not has_auth:
+      if mode == "hybrid" or (mode == "token" and allow_query_fallback):
+        return self._resolve_from_query_with_mode(
+          user_id=user_id,
+          company_id=company_id,
+          currency=currency,
+          mode=mode,
+        )
       raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Missing Authorization header",
       )
-    scope = self.validate_token(authorization)
-    if user_id is not None and int(user_id) != scope.user_id:
-      raise HTTPException(status.HTTP_403_FORBIDDEN, "user_id mismatch")
-    if company_id is not None and int(company_id) != scope.company_id:
-      raise HTTPException(status.HTTP_403_FORBIDDEN, "company_id mismatch")
+
+    try:
+      scope = self.validate_token(authorization)
+    except HTTPException as exc:
+      can_fallback = (
+        allow_query_fallback
+        and has_query
+        and mode in {"hybrid", "token"}
+        and exc.status_code in {
+          status.HTTP_401_UNAUTHORIZED,
+          status.HTTP_502_BAD_GATEWAY,
+          status.HTTP_503_SERVICE_UNAVAILABLE,
+        }
+      )
+      if can_fallback:
+        logger.warning(
+          "bizwy.resolve_user token_validation_failed status=%s; using query scope",
+          exc.status_code,
+        )
+        return self._resolve_from_query_with_mode(
+          user_id=user_id,
+          company_id=company_id,
+          currency=currency,
+          mode=mode,
+        )
+      raise
+
+    self._assert_scope_matches_query(
+      scope, user_id=user_id, company_id=company_id
+    )
     return scope
 
 
