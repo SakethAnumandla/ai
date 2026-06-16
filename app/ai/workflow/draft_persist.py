@@ -38,6 +38,7 @@ def _build_tool_args(slots: Dict[str, Any]) -> Dict[str, Any]:
         "creation_mode",
         "expense_id",
         "_attachment_complete",
+        "_bill_attached",
         "selected_categories",
         "extra_category_tags",
         "others_description",

@@ -14,6 +14,7 @@ from app.ai.schemas.workflow import ConversationWorkflowState, WorkflowScope, Wo
 from app.ai.services.memory_service import MemoryService
 from app.ai.workflow.draft_persist import persist_workflow_draft
 from app.ai.workflow.draft_summary import format_draft_summary
+from app.ai.schemas.chat_ui import workflow_summary_actions
 from app.ai.workflow.slot_parser import (
     infer_food_sub_category,
     is_workflow_slot_message,
@@ -143,19 +144,21 @@ class WorkflowEngine:
                 state.pending_slots,
             )
             if not state.pending_slots:
-                state.slots["_awaiting_submit_confirm"] = True
                 if user and self._db:
                     state, _ = persist_workflow_draft(self._db, user, state)
                 await self._persist(ctx, state)
+                attach_result = self._sm._prompt_attachment_or_submit(state, user_content)
+                if attach_result.updated_state:
+                    state = attach_result.updated_state
+                    await self._persist(ctx, state)
                 synced = state
                 preview = self._preview_for_state(synced)
-                from app.ai.schemas.chat_ui import workflow_summary_actions
-
                 eid = synced.expense_id or synced.slots.get("expense_id")
                 return WorkflowContinueResult(
                     handled=True,
-                    message=format_draft_summary(synced.slots),
-                    ui_actions=workflow_summary_actions(int(eid) if eid else None),
+                    message=attach_result.assistant_message or format_draft_summary(synced.slots),
+                    ui_actions=attach_result.ui_actions
+                    or workflow_summary_actions(int(eid) if eid else None),
                     expense_previews=[preview] if preview else None,
                 )
             synced = await self._sync_draft_if_needed(ctx, state, user=user)

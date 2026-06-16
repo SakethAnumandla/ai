@@ -350,9 +350,16 @@ class ExpenseService:
         return expense
 
     def submit_for_approval(
-        self, expense_id: int, user_id: int, company_id: Optional[int] = None
+        self,
+        expense_id: int,
+        user_id: int,
+        company_id: Optional[int] = None,
+        *,
+        auto_approve: Optional[bool] = None,
     ) -> Expense:
-        """Move draft or legacy pending expense to submitted (awaiting approval)."""
+        """Move draft or legacy pending expense to submitted, or self-auto-approve (owner only)."""
+        from app.config import settings
+
         expense = self.get_expense(expense_id, user_id, company_id)
         if not expense:
             raise HTTPException(
@@ -374,12 +381,33 @@ class ExpenseService:
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail="Rejected expense is missing required fields before resubmit",
                 )
-        expense.status = ExpenseStatus.SUBMITTED
-        expense.rejection_reason = None
-        expense.updated_at = datetime.utcnow()
-        from app.services.expense_approval_service import create_expense_approval_workflow
 
-        create_expense_approval_workflow(self.db, expense)
+        use_auto = (
+            auto_approve
+            if auto_approve is not None
+            else settings.expense_self_auto_approve_enabled
+        )
+        if use_auto:
+            if expense.user_id != user_id:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Only the expense owner can self-auto-approve their bill",
+                )
+            expense.status = ExpenseStatus.APPROVED
+            expense.approved_at = datetime.utcnow()
+            expense.rejection_reason = None
+            expense.updated_at = datetime.utcnow()
+            from app.services.wallet_service import WalletService
+
+            WalletService(self.db).update_wallet_balance(user_id, expense)
+        else:
+            expense.status = ExpenseStatus.SUBMITTED
+            expense.rejection_reason = None
+            expense.updated_at = datetime.utcnow()
+            from app.services.expense_approval_service import create_expense_approval_workflow
+
+            create_expense_approval_workflow(self.db, expense)
+
         self.db.commit()
         self.db.refresh(expense)
         return expense
@@ -515,6 +543,11 @@ class ExpenseService:
             expense.payment_method = parse_payment_method(pm)
 
         if data.auto_approve:
+            if expense.user_id != user_id:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Only the expense owner can self-auto-approve their bill",
+                )
             expense.status = ExpenseStatus.APPROVED
             expense.approved_at = datetime.utcnow()
             expense.rejection_reason = None

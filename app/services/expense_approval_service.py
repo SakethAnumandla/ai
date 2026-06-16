@@ -13,8 +13,79 @@ from app.data.business_taxonomy import (
     resolve_approval_roles,
 )
 from app.dependencies import DEV_USER_USERNAME
-from app.models import ApprovalStatus, Expense, ExpenseApproval, ExpenseStatus, User
+from app.models import ApprovalStatus, Expense, ExpenseApproval, ExpenseStatus, User, UserRole
 from app.schemas import ExpenseApprovalRemark, ExpenseApprovalRemarksResponse
+
+# UserRole / Bizwy user_type → workflow approval_level keys on ExpenseApproval
+_USER_ROLE_APPROVAL_LEVELS: Dict[UserRole, frozenset] = {
+    UserRole.MANAGER: frozenset({"manager"}),
+    UserRole.DEPARTMENT_HEAD: frozenset({"manager", "hod"}),
+    UserRole.FINANCE_ADMIN: frozenset({"finance", "hr", "admin"}),
+    UserRole.SUPER_ADMIN: frozenset(
+        {"manager", "hod", "hr", "finance", "director", "ceo", "admin", "it", "marketing", "purchase", "ops"}
+    ),
+}
+
+_BIZWY_TYPE_APPROVAL_LEVELS: Dict[str, frozenset] = {
+    "manager": frozenset({"manager"}),
+    "hod": frozenset({"hod"}),
+    "department_head": frozenset({"hod", "manager"}),
+    "head_of_department": frozenset({"hod", "manager"}),
+    "hr": frozenset({"hr"}),
+    "finance": frozenset({"finance", "admin"}),
+    "finance_admin": frozenset({"finance", "admin"}),
+    "director": frozenset({"director"}),
+    "ceo": frozenset({"ceo", "director"}),
+    "admin": frozenset({"admin"}),
+    "super_admin": frozenset(
+        {"manager", "hod", "hr", "finance", "director", "ceo", "admin", "it", "marketing", "purchase", "ops"}
+    ),
+}
+
+
+def _normalize_key(value: Optional[str]) -> str:
+    return (value or "").strip().lower().replace(" ", "_").replace("-", "_")
+
+
+def _approval_levels_for_user(
+    user: User, *, bizwy_user_type: Optional[str] = None
+) -> frozenset:
+    levels: set = set()
+    if user.role and user.role in _USER_ROLE_APPROVAL_LEVELS:
+        levels.update(_USER_ROLE_APPROVAL_LEVELS[user.role])
+    if user.is_admin:
+        levels.update(_USER_ROLE_APPROVAL_LEVELS[UserRole.SUPER_ADMIN])
+    ut = _normalize_key(bizwy_user_type)
+    if ut and ut in _BIZWY_TYPE_APPROVAL_LEVELS:
+        levels.update(_BIZWY_TYPE_APPROVAL_LEVELS[ut])
+    return frozenset(levels)
+
+
+def _user_role_from_bizwy_type(user_type: Optional[str]) -> UserRole:
+    key = _normalize_key(user_type)
+    if key in ("super_admin", "admin"):
+        return UserRole.SUPER_ADMIN
+    if key in ("finance", "finance_admin"):
+        return UserRole.FINANCE_ADMIN
+    if key in ("hod", "department_head", "head_of_department"):
+        return UserRole.DEPARTMENT_HEAD
+    if key in ("manager",):
+        return UserRole.MANAGER
+    return UserRole.EMPLOYEE
+
+
+def load_approval_actor(
+    db: Session, user_id: int, *, bizwy_user_type: Optional[str] = None
+) -> User:
+    """Load DB user for approval checks; synthesize minimal row if absent."""
+    row = db.query(User).filter(User.id == user_id).first()
+    if row:
+        return row
+    return User(
+        id=user_id,
+        username=f"user_{user_id}",
+        role=_user_role_from_bizwy_type(bizwy_user_type),
+    )
 
 
 def _roles_for_expense(expense: Expense) -> List[str]:
@@ -128,6 +199,7 @@ def _pick_approver(role: str) -> Dict[str, Any]:
 
 
 def _resolve_approver_user_id(db: Session, person: Dict[str, Any]) -> Optional[int]:
+    """Bind step to a real user when possible; otherwise None → role-based authorization."""
     raw_id = person.get("id")
     if raw_id is not None:
         if db.query(User).filter(User.id == int(raw_id)).first():
@@ -141,9 +213,7 @@ def _resolve_approver_user_id(db: Session, person: Dict[str, Any]) -> Optional[i
         )
         if match:
             return match.id
-    # Local dev: directory IDs (101, 201, …) are not real users — bind to dev user.
-    dev = db.query(User).filter(User.username == DEV_USER_USERNAME).first()
-    return dev.id if dev else None
+    return None
 
 
 def first_pending_approval_step(expense: Expense) -> Optional[ExpenseApproval]:
@@ -152,19 +222,27 @@ def first_pending_approval_step(expense: Expense) -> Optional[ExpenseApproval]:
 
 
 def user_can_act_on_step(
-    db: Session, user: User, step: ExpenseApproval, *, company_scoped: bool = False
+    db: Session,
+    user: User,
+    step: ExpenseApproval,
+    *,
+    expense: Optional[Expense] = None,
+    bizwy_user_type: Optional[str] = None,
 ) -> bool:
     """Whether [user] may approve/reject this workflow step now."""
     if step.status != ApprovalStatus.PENDING:
         return False
-    if company_scoped:
-        return True
-    # Local dev: default user acts as stand-in for directory approvers (IDs 101, 201, …).
+    if expense is not None and expense.user_id == user.id:
+        return False
     if user.username == DEV_USER_USERNAME:
         return True
     if step.approver_id is not None and step.approver_id == user.id:
         return True
-    if step.approver_id is None:
+    step_level = _normalize_key(step.approval_level)
+    allowed = _approval_levels_for_user(user, bizwy_user_type=bizwy_user_type)
+    if step_level and step_level in allowed:
+        return True
+    if step.approver_id is None and allowed:
         return True
     approver_name = (step.approver_name or "").strip().lower()
     user_name = (user.full_name or user.username or "").strip().lower()
@@ -190,7 +268,7 @@ def user_can_view_expense(db: Session, expense_id: int, user: User) -> bool:
     if not steps:
         return False
     pending = first_pending_approval_step(expense)
-    if pending and user_can_act_on_step(db, user, pending):
+    if pending and user_can_act_on_step(db, user, pending, expense=expense):
         return True
     return any(
         s.approver_id == user.id
@@ -356,6 +434,7 @@ def process_expense_approval(
     user: User,
     action: str,
     comments: Optional[str] = None,
+    bizwy_user_type: Optional[str] = None,
 ) -> Expense:
     step = db.query(ExpenseApproval).filter(ExpenseApproval.id == approval_id).first()
     if not step:
@@ -378,10 +457,19 @@ def process_expense_approval(
         raise ValueError("Earlier approval steps must be completed first")
 
     now = datetime.now(timezone.utc)
-    actor = user or (db.query(User).filter(User.id == expense.user_id).first())
-    company_scoped = bool(actor and actor.id != expense.user_id)
+    actor = user
+    if actor and actor.id and not getattr(actor, "role", None) and not actor.full_name:
+        actor = load_approval_actor(db, int(actor.id), bizwy_user_type=bizwy_user_type)
+    elif actor and actor.id:
+        loaded = db.query(User).filter(User.id == actor.id).first()
+        if loaded:
+            actor = loaded
     if actor and not user_can_act_on_step(
-        db, actor, step, company_scoped=company_scoped
+        db,
+        actor,
+        step,
+        expense=expense,
+        bizwy_user_type=bizwy_user_type,
     ):
         raise ValueError("You are not authorized to act on this approval step")
 
@@ -438,6 +526,7 @@ def approve_expense_current_step(
     action: str,
     comments: Optional[str] = None,
     user: Optional[User] = None,
+    bizwy_user_type: Optional[str] = None,
 ) -> Expense:
     """Approve/reject the next pending workflow step for an expense."""
     steps = sorted(expense.approval_steps or [], key=lambda s: s.sequence_order)
@@ -454,14 +543,19 @@ def approve_expense_current_step(
         user=user,
         action=action,
         comments=comments,
+        bizwy_user_type=bizwy_user_type,
     )
 
 
 def list_pending_for_user(
-    db: Session, user_id: int, company_id: Optional[int] = None
+    db: Session,
+    user_id: int,
+    company_id: Optional[int] = None,
+    *,
+    bizwy_user_type: Optional[str] = None,
 ) -> List[ExpenseApproval]:
     """One actionable pending step per expense (L1 before L2)."""
-    user = db.query(User).filter(User.id == user_id).first()
+    user = load_approval_actor(db, user_id, bizwy_user_type=bizwy_user_type)
 
     expenses_q = (
         db.query(Expense)
@@ -476,21 +570,31 @@ def list_pending_for_user(
         pending = first_pending_approval_step(expense)
         if not pending:
             continue
-        if user and user_can_act_on_step(db, user, pending, company_scoped=company_id is not None):
-            out.append(pending)
-        elif company_id is not None and not user:
+        if user_can_act_on_step(
+            db,
+            user,
+            pending,
+            expense=expense,
+            bizwy_user_type=bizwy_user_type,
+        ):
             out.append(pending)
     return out
 
 
 def pending_approval_groups_for_user(
-    db: Session, user_id: int, company_id: Optional[int] = None
+    db: Session,
+    user_id: int,
+    company_id: Optional[int] = None,
+    *,
+    bizwy_user_type: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """Grouped pending queue with full chain + progress for the approval screen."""
     from app.utils.expense_helpers import submitted_by_display
 
     groups: List[Dict[str, Any]] = []
-    for step in list_pending_for_user(db, user_id, company_id=company_id):
+    for step in list_pending_for_user(
+        db, user_id, company_id=company_id, bizwy_user_type=bizwy_user_type
+    ):
         expense = (
             db.query(Expense)
             .options(joinedload(Expense.approval_steps))
@@ -544,12 +648,18 @@ def pending_approval_groups_for_user(
 
 
 def build_pending_expense_approval_queue(
-    db: Session, user_id: int, company_id: Optional[int] = None
+    db: Session,
+    user_id: int,
+    company_id: Optional[int] = None,
+    *,
+    bizwy_user_type: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Flat + grouped pending queue payload for GET /expenses/approvals/pending."""
     from app.data.business_taxonomy import APPROVER_DIRECTORY
 
-    groups = pending_approval_groups_for_user(db, user_id, company_id=company_id)
+    groups = pending_approval_groups_for_user(
+        db, user_id, company_id=company_id, bizwy_user_type=bizwy_user_type
+    )
     flat: List[Dict[str, Any]] = []
     for group in groups:
         for step in group.get("steps") or []:

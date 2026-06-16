@@ -66,6 +66,15 @@ class ExpensePreviewCard(BaseModel):
     fields_needing_clarification: List[str] = Field(default_factory=list)
     actions: List[ChatUIAction] = Field(default_factory=list)
     is_duplicate: bool = False
+    has_bill_attachment: bool = False
+
+
+def _submit_action_label() -> str:
+    from app.config import settings
+
+    if settings.expense_self_auto_approve_enabled:
+        return "Save expense"
+    return "Submit for approval"
 
 
 def default_expense_card_actions(expense_id: int, *, status: str) -> List[ChatUIAction]:
@@ -78,7 +87,7 @@ def default_expense_card_actions(expense_id: int, *, status: str) -> List[ChatUI
         ),
         ChatUIAction(
             action="submit",
-            label="Submit for approval",
+            label=_submit_action_label(),
             expense_id=expense_id,
             style="primary",
         ),
@@ -101,7 +110,7 @@ def workflow_summary_actions(expense_id: Optional[int] = None) -> List[ChatUIAct
         return default_expense_card_actions(expense_id, status="draft")
     return [
         ChatUIAction(action="edit", label="Edit", style="secondary"),
-        ChatUIAction(action="submit", label="Submit for approval", style="primary"),
+        ChatUIAction(action="submit", label=_submit_action_label(), style="primary"),
     ]
 
 
@@ -162,6 +171,10 @@ def build_fields_from_prefill(prefill: Dict[str, Any]) -> List[ExpenseFieldPrevi
         ("bill_date", "bill_date", "Date"),
         ("main_category", "main_category", "Category"),
         ("sub_category", "sub_category", "Sub-category"),
+        ("line_item", "line_item", "Line item"),
+        ("tax_amount", "tax_amount", "Tax"),
+        ("submitted_by_name", "submitted_by_name", "Submitted by"),
+        ("submitted_by_role", "submitted_by_role", "Role"),
         ("payment_method", "payment_method", "Payment"),
         ("bill_number", "bill_number", "Bill number"),
         ("description", "description", "Description"),
@@ -173,6 +186,8 @@ def build_fields_from_prefill(prefill: Dict[str, Any]) -> List[ExpenseFieldPrevi
             continue
         if key == "bill_amount":
             display = f"{float(val):,.2f}" if val else None
+        elif key == "tax_amount":
+            display = f"{float(val):,.2f}" if val is not None else None
         elif key in ("bill_date",) and hasattr(val, "isoformat"):
             display = val.isoformat()
         else:

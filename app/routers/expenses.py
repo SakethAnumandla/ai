@@ -17,6 +17,7 @@ from app.services.expense_approval_service import (
     build_expense_approval_workflow_payload,
     build_pending_expense_approval_queue,
     get_expense_for_viewer,
+    load_approval_actor,
     process_expense_approval,
 )
 from app.schemas import (
@@ -67,7 +68,10 @@ async def pending_expense_approvals(
     scope: CompanyScope = Depends(get_company_scope),
 ):
     return build_pending_expense_approval_queue(
-        db, scope.approver_user_id, company_id=scope.company_id
+        db,
+        scope.approver_user_id,
+        company_id=scope.company_id,
+        bizwy_user_type=scope.user_type,
     )
 
 
@@ -95,15 +99,16 @@ async def expense_approval_action(
     scope: CompanyScope = Depends(get_company_scope),
 ):
     try:
-        from app.models import User
-
-        actor = User(id=scope.approver_user_id)
+        actor = load_approval_actor(
+            db, scope.approver_user_id, bizwy_user_type=scope.user_type
+        )
         expense = process_expense_approval(
             db,
             approval_id=approval_id,
             user=actor,
             action=body.action,
             comments=body.resolved_remarks(),
+            bizwy_user_type=scope.user_type,
         )
         db.commit()
         db.refresh(expense)
@@ -396,7 +401,6 @@ async def approve_expense(
     db: Session = Depends(get_db),
     scope: CompanyScope = Depends(get_company_scope),
 ):
-    from app.models import User
     from app.services.expense_approval_service import approve_expense_current_step
 
     expense = (
@@ -406,7 +410,9 @@ async def approve_expense(
     )
     if not expense:
         raise HTTPException(status_code=404, detail="Expense not found")
-    actor = User(id=scope.approver_user_id)
+    actor = load_approval_actor(
+        db, scope.approver_user_id, bizwy_user_type=scope.user_type
+    )
     if expense.approval_steps:
         action = "approve" if body.status == ExpenseStatus.APPROVED else "reject"
         try:
@@ -416,6 +422,7 @@ async def approve_expense(
                 action=action,
                 comments=body.comments or body.rejection_reason,
                 user=actor,
+                bizwy_user_type=scope.user_type,
             )
             db.commit()
             db.refresh(expense)

@@ -37,6 +37,7 @@ from app.utils.dashboard_queries import expense_status_display
 from app.schemas import ExpenseCreate, ExpenseUpdate
 from app.services.expense_service import ExpenseService
 from app.ai.security import scoped_company_id
+from app.config import settings
 
 
 def _cid(user: User, ctx: SessionContext) -> int:
@@ -93,6 +94,7 @@ async def handle_expense_create_v1(
     expense_id: Optional[int] = None,
     review_token: Optional[str] = None,
     save_as_draft: bool = False,
+    auto_approve: bool = False,
     **_,
 ) -> ToolResult:
     logger.info(
@@ -119,6 +121,7 @@ async def handle_expense_create_v1(
             bill_date=bill_date,
             review_token=review_token,
             save_as_draft=save_as_draft,
+            auto_approve=auto_approve,
         )
 
     if bill_amount is None or float(bill_amount) <= 0:
@@ -174,6 +177,8 @@ async def handle_expense_create_v1(
         )
 
     status = ExpenseStatus.DRAFT if save_as_draft else ExpenseStatus.SUBMITTED
+    if not save_as_draft and (auto_approve or settings.expense_self_auto_approve_enabled):
+        status = ExpenseStatus.APPROVED
     try:
         expense = ExpenseService.create_expense(
             db,
@@ -191,10 +196,29 @@ async def handle_expense_create_v1(
                 data={"needs_clarification": True, "field": "sub_category"},
             )
         raise
+
+    if expense.status == ExpenseStatus.SUBMITTED:
+        from app.services.expense_approval_service import create_expense_approval_workflow
+
+        create_expense_approval_workflow(db, expense)
+        db.commit()
+        db.refresh(expense)
+    elif expense.status == ExpenseStatus.APPROVED:
+        expense.approved_at = datetime.utcnow()
+        from app.services.wallet_service import WalletService
+
+        WalletService(db).update_wallet_balance(user.id, expense)
+        db.commit()
+        db.refresh(expense)
+
     if save_as_draft:
         message = (
             f"Saved draft expense '{expense.bill_name}' for ₹{expense.bill_amount:,.2f}. "
             "Say when you want to submit it for approval."
+        )
+    elif expense.status == ExpenseStatus.APPROVED:
+        message = (
+            f"Done 👍 Saved and approved '{expense.bill_name}' (₹{expense.bill_amount:,.2f})."
         )
     else:
         message = (
@@ -223,6 +247,7 @@ async def _confirm_existing_draft(
     bill_date: Optional[str],
     review_token: Optional[str],
     save_as_draft: bool,
+    auto_approve: bool = False,
 ) -> ToolResult:
     company_id = _cid(user, ctx)
     svc = ExpenseService(db)
@@ -321,13 +346,20 @@ async def _confirm_existing_draft(
         ExpenseStatus.PENDING,
         ExpenseStatus.REJECTED,
     ):
-        expense = svc.submit_for_approval(expense_id, user.id, company_id)
+        use_auto = auto_approve or settings.expense_self_auto_approve_enabled
+        expense = svc.submit_for_approval(
+            expense_id,
+            user.id,
+            company_id,
+            auto_approve=use_auto,
+        )
 
-    status_note = (
-        " and submitted for approval"
-        if expense.status == ExpenseStatus.SUBMITTED
-        else ""
-    )
+    if expense.status == ExpenseStatus.APPROVED:
+        status_note = " and approved"
+    elif expense.status == ExpenseStatus.SUBMITTED:
+        status_note = " and submitted for approval"
+    else:
+        status_note = ""
     return ToolResult.ok(
         message=(
             f"Confirmed expense #{expense.id} "
@@ -348,6 +380,7 @@ async def handle_expense_submit_v1(
     ctx: SessionContext,
     expense_id: int,
     idempotency_key: str,
+    auto_approve: bool = False,
     **_,
 ) -> ToolResult:
     company_id = _cid(user, ctx)
@@ -373,9 +406,22 @@ async def handle_expense_submit_v1(
             ),
             data={"expense_id": expense.id, "status": expense.status.value},
         )
-    updated = svc.submit_for_approval(expense_id, user.id, company_id)
+    use_auto = auto_approve or settings.expense_self_auto_approve_enabled
+    updated = svc.submit_for_approval(
+        expense_id, user.id, company_id, auto_approve=use_auto
+    )
+    if updated.status == ExpenseStatus.APPROVED:
+        message = (
+            f"Expense #{updated.id} ({updated.bill_name}, "
+            f"₹{updated.bill_amount:,.2f}) saved and approved."
+        )
+    else:
+        message = (
+            f"Expense #{updated.id} ({updated.bill_name}, "
+            f"₹{updated.bill_amount:,.2f}) submitted for approval."
+        )
     return ToolResult.ok(
-        message=f"Expense #{updated.id} ({updated.bill_name}, ₹{updated.bill_amount:,.2f}) submitted for approval.",
+        message=message,
         data={"expense_id": updated.id, "status": updated.status.value},
     )
 

@@ -253,8 +253,9 @@ _OCR_WAIT_MESSAGE = (
 )
 
 _MANUAL_ATTACHMENT_QUESTION = (
-    "You can attach your bill using **Upload bill** below (JPG, PNG, or PDF), "
-    "or reply **skip** to continue without a file."
+    "Would you like to **attach your bill**?\n\n"
+    "• Tap **Upload bill** below to attach a receipt (JPG, PNG, or PDF)\n"
+    "• Reply **skip** to save the expense without a file"
 )
 
 _UPLOAD_CHOICE_RE = re.compile(
@@ -407,18 +408,7 @@ class ConversationStateMachine:
         if self._needs_others_detail(state.slots):
             return self._prompt_others_detail(state)
         if not state.pending_slots:
-            return self._offer_submit_confirmation(state, text)
-        if self._should_prompt_attachment(state):
-            state.slots[_MANUAL_ATTACHMENT_SLOT] = True
-            from app.ai.schemas.chat_ui import attachment_prompt_actions
-
-            return StateMachineResult(
-                handled=True,
-                assistant_message=_MANUAL_ATTACHMENT_QUESTION,
-                updated_state=state,
-                ui_actions=attachment_prompt_actions(),
-                sync_draft=True,
-            )
+            return self._prompt_attachment_or_submit(state, text)
         next_slot = state.pending_slots[0]
         return _prompt_for_slot(state, next_slot, intro="Saved your category description.")
 
@@ -446,7 +436,32 @@ class ConversationStateMachine:
         return None
 
     def _should_prompt_attachment(self, state: ConversationWorkflowState) -> bool:
-        return False
+        s = state.slots
+        if not _is_manual(s):
+            return False
+        if s.get("_attachment_complete") or s.get(_MANUAL_ATTACHMENT_SLOT):
+            return False
+        if not s.get("main_category"):
+            return False
+        if state.pending_slots:
+            return False
+        return True
+
+    def _prompt_attachment_or_submit(
+        self, state: ConversationWorkflowState, text: str
+    ) -> StateMachineResult:
+        if self._should_prompt_attachment(state):
+            state.slots[_MANUAL_ATTACHMENT_SLOT] = True
+            from app.ai.schemas.chat_ui import attachment_prompt_actions
+
+            return StateMachineResult(
+                handled=True,
+                assistant_message=_MANUAL_ATTACHMENT_QUESTION,
+                updated_state=state,
+                ui_actions=attachment_prompt_actions(),
+                sync_draft=True,
+            )
+        return self._offer_submit_confirmation(state, text)
 
     def _merge_entities_from_message(
         self,
@@ -688,14 +703,31 @@ class ConversationStateMachine:
         self, state: ConversationWorkflowState, text: str
     ) -> StateMachineResult:
         """All slots filled — ask to submit unless user already asked to submit now."""
+        if self._should_prompt_attachment(state):
+            state.slots[_MANUAL_ATTACHMENT_SLOT] = True
+            from app.ai.schemas.chat_ui import attachment_prompt_actions
+
+            return StateMachineResult(
+                handled=True,
+                assistant_message=_MANUAL_ATTACHMENT_QUESTION,
+                updated_state=state,
+                ui_actions=attachment_prompt_actions(),
+                sync_draft=True,
+            )
         if self._wants_immediate_submit(text):
             return self._complete(state, submit_now=True)
         state.slots[_SUBMIT_CONFIRM_SLOT] = True
         from app.ai.workflow.draft_summary import format_draft_summary
 
+        has_bill = None
+        if state.slots.get("_attachment_complete"):
+            has_bill = bool(state.slots.get("_bill_attached"))
+
         return StateMachineResult(
             handled=True,
-            assistant_message=format_draft_summary(state.slots, intro="Got it 👍"),
+            assistant_message=format_draft_summary(
+                state.slots, intro="Got it 👍", has_bill=has_bill
+            ),
             updated_state=state,
             clear_state=False,
             ui_actions=_summary_ui_actions(state),
@@ -750,9 +782,10 @@ class ConversationStateMachine:
         if _SKIP_ATTACHMENT_RE.search((text or "").strip()):
             state.slots.pop(_MANUAL_ATTACHMENT_SLOT, None)
             state.slots["_attachment_complete"] = True
+            state.slots["_bill_attached"] = False
             state.pending_slots = self._recompute_pending_slots(state.slots)
             if not state.pending_slots:
-                return self._offer_submit_confirmation(state, text)
+                return self._prompt_attachment_or_submit(state, text)
             return _prompt_for_slot(state, state.pending_slots[0], intro="Okay — continuing without a file.")
         from app.ai.schemas.chat_ui import attachment_prompt_actions
 
@@ -920,7 +953,7 @@ class ConversationStateMachine:
                     ui_actions=ocr_upload_actions(),
                 )
             if not state.pending_slots:
-                return self._offer_submit_confirmation(state, text)
+                return self._prompt_attachment_or_submit(state, text)
             next_slot = state.pending_slots[0] if state.pending_slots else None
             if next_slot:
                 logger.info(
@@ -1062,7 +1095,7 @@ class ConversationStateMachine:
                 break
 
         if not state.pending_slots:
-            return self._offer_submit_confirmation(state, text)
+            return self._prompt_attachment_or_submit(state, text)
 
         next_slot = state.pending_slots[0]
         logger.info(
@@ -1097,6 +1130,7 @@ class ConversationStateMachine:
             "_source_utterance",
             "creation_mode",
             "_attachment_complete",
+            "_bill_attached",
             "selected_categories",
             "extra_category_tags",
             "others_description",
@@ -1139,6 +1173,11 @@ class ConversationStateMachine:
             tool_args["submitted_by_role"] = args.get("submitted_by_role")
         if state.expense_id:
             tool_args["expense_id"] = state.expense_id
+
+        from app.config import settings
+
+        if submit_now and settings.expense_self_auto_approve_enabled:
+            tool_args["auto_approve"] = True
 
         return StateMachineResult(
             handled=True,

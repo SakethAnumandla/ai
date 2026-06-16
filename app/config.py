@@ -89,6 +89,9 @@ class Settings(BaseSettings):
     # Human confirmation
     ai_confirmation_ttl_seconds: int = 600
 
+    # When true, expense owners can auto-approve their own bills on submit (chat + API)
+    expense_self_auto_approve_enabled: bool = True
+
     # Cost tracking (USD per 1M tokens — approximate)
     ai_cost_per_1m_prompt_tokens: float = 0.15
     ai_cost_per_1m_completion_tokens: float = 0.60

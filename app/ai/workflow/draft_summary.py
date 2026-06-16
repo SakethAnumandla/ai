@@ -24,7 +24,9 @@ def _label(value: Optional[str]) -> str:
     return str(value).replace("_", " ").title()
 
 
-def format_draft_summary(slots: Dict[str, Any], *, intro: str = "Perfect 👍") -> str:
+def format_draft_summary(
+    slots: Dict[str, Any], *, intro: str = "Perfect 👍", has_bill: Optional[bool] = None
+) -> str:
     bill_name = slots.get("bill_name") or "—"
     merchant = slots.get("vendor_name") or "—"
     description = slots.get("description") or "—"
@@ -61,8 +63,16 @@ def format_draft_summary(slots: Dict[str, Any], *, intro: str = "Perfect 👍") 
             f"• Submitted by: {submitter}",
             f"• Role: {role}",
             f"• Description: {description}",
-            "",
-            "Review the details above. Tap **Edit** to change a field or **Submit** to send for approval.",
         ]
     )
+    if has_bill is not None:
+        lines.append(f"• Bill attached: {'Yes' if has_bill else 'No'}")
+    from app.config import settings
+
+    save_hint = (
+        "Review the details above. Tap **Edit** to change a field or **Save expense** to finish."
+        if settings.expense_self_auto_approve_enabled
+        else "Review the details above. Tap **Edit** to change a field or **Submit** to send for approval."
+    )
+    lines.extend(["", save_hint])
     return "\n".join(lines)

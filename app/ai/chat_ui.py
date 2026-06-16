@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.ai.schemas.chat_ui import (
     ChatUIAction,
+    ExpenseFieldPreview,
     ExpensePreviewCard,
     build_fields_from_prefill,
     default_expense_card_actions,
@@ -84,6 +85,7 @@ def build_expense_preview_card(
         fields_needing_clarification=clarify,
         actions=default_expense_card_actions(expense.id, status=status),
         is_duplicate=result.is_duplicate,
+        has_bill_attachment=bool(expense.files),
     )
 
 
@@ -152,12 +154,26 @@ def build_workflow_preview_card(
             expense.main_category.value if expense.main_category else slots.get("main_category")
         ),
         "sub_category": expense.sub_category or slots.get("sub_category"),
+        "line_item": expense.line_item or slots.get("line_item"),
+        "tax_amount": expense.tax_amount if expense.tax_amount else slots.get("tax_amount"),
+        "submitted_by_name": expense.submitted_by_name or slots.get("submitted_by_name"),
+        "submitted_by_role": expense.submitted_by_role or slots.get("submitted_by_role"),
         "payment_method": (
             expense.payment_method.value if expense.payment_method else slots.get("payment_method")
         ),
         "description": expense.description or slots.get("description"),
         "bill_date": expense.bill_date,
+        "bill_number": expense.bill_number,
     }
+    fields = build_fields_from_prefill(prefill)
+    has_bill = bool(expense.files)
+    fields.append(
+        ExpenseFieldPreview(
+            key="bill_attachment",
+            label="Bill attached",
+            value="Yes" if has_bill else "No",
+        )
+    )
     status = expense.status.value if expense.status else "draft"
     return ExpensePreviewCard(
         expense_id=expense.id,
@@ -172,9 +188,10 @@ def build_workflow_preview_card(
         ),
         bill_date=expense.bill_date.isoformat() if expense.bill_date else None,
         status=status,
-        preview_url=resp.preview_url,
-        thumbnail_url=resp.thumbnail_url,
-        can_preview=bool(resp.can_preview),
-        fields=build_fields_from_prefill(prefill),
+        preview_url=resp.preview_url if has_bill else None,
+        thumbnail_url=resp.thumbnail_url if has_bill else None,
+        can_preview=bool(resp.can_preview) if has_bill else False,
+        fields=fields,
         actions=default_expense_card_actions(expense.id, status=status),
+        has_bill_attachment=has_bill,
     )

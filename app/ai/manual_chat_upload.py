@@ -57,6 +57,7 @@ def attach_receipt_to_manual_workflow(
 
     state.slots.pop(_MANUAL_ATTACHMENT_SLOT, None)
     state.slots["_attachment_complete"] = True
+    state.slots["_bill_attached"] = True
     state.updated_at = datetime.utcnow()
 
     sm = ConversationStateMachine()
@@ -72,9 +73,12 @@ def attach_receipt_to_manual_workflow(
             category_picker = build_category_picker(next_slot, slots=state.slots)
             ui_actions = category_ui_actions(next_slot, slots=state.slots)
     else:
+        from app.config import settings
+
+        save_label = "Save expense" if settings.expense_self_auto_approve_enabled else "Submit for approval"
         message = (
-            "Your receipt has been saved. Review the details below, "
-            "then tap **Edit** or **Submit for approval**."
+            f"Your receipt has been saved. Review the details below, "
+            f"then tap **Edit** or **{save_label}**."
         )
 
     return state, preview, message, category_picker, ui_actions

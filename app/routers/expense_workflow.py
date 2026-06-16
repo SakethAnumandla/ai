@@ -16,6 +16,7 @@ from app.services.expense_approval_service import (
     build_expense_approval_workflow_payload,
     build_pending_expense_approval_queue,
     get_expense_for_viewer,
+    load_approval_actor,
     process_expense_approval,
 )
 from app.utils.expense_helpers import build_expense_response
