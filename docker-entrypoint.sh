@@ -11,7 +11,10 @@ if [ "$1" = "uvicorn" ]; then
     --port "$PORT" \
     --workers "${UVICORN_WORKERS:-1}" \
     --timeout-keep-alive 120 \
-    --limit-concurrency "${UVICORN_LIMIT_CONCURRENCY:-40}"
+    --timeout-graceful-shutdown 30 \
+    --limit-concurrency "${UVICORN_LIMIT_CONCURRENCY:-40}" \
+    --proxy-headers \
+    --forwarded-allow-ips='*'
 fi
 
 exec "$@"

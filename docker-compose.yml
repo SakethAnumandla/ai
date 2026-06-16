@@ -15,7 +15,7 @@ services:
       UVICORN_LIMIT_CONCURRENCY: "40"
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import json,urllib.request; r=urllib.request.urlopen('http://127.0.0.1:8000/health'); d=json.load(r); assert d.get('database',{}).get('ok')"]
+      test: ["CMD", "python", "-c", "import json,urllib.request; r=urllib.request.urlopen('http://127.0.0.1:8000/health/ready'); d=json.load(r); assert d.get('database',{}).get('ok')"]
       interval: 10s
       timeout: 5s
       retries: 6

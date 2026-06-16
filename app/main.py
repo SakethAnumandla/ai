@@ -19,6 +19,9 @@ from app.middleware.no_buffer import NoBufferMiddleware
 
 logger = logging.getLogger(__name__)
 
+# Set True after background schema/migrations finish (used by /health/ready).
+_startup_ready = False
+
 
 def _db_unavailable_message(exc: BaseException) -> str:
     msg = str(getattr(exc, "orig", exc))
@@ -48,9 +51,10 @@ def _init_database_schema() -> None:
 
 async def _run_startup_init() -> None:
     """Schema + migrations off the critical path so Uvicorn binds $PORT before Render's scan."""
+    global _startup_ready
     loop = asyncio.get_running_loop()
-    await loop.run_in_executor(None, _init_database_schema)
     try:
+        await loop.run_in_executor(None, _init_database_schema)
         from app.migrations.add_expense_business_fields import run as _migrate_business
         from app.migrations.add_expense_submitted_by import run as _migrate_submitted_by
 
@@ -60,7 +64,10 @@ async def _run_startup_init() -> None:
 
         await loop.run_in_executor(None, _migrate_company_scope)
     except Exception as exc:
-        logger.warning("business_fields_migration: %s", exc)
+        logger.warning("startup_init: %s", exc)
+    finally:
+        _startup_ready = True
+        logger.info("startup_init complete ready=%s", _startup_ready)
 
 
 @asynccontextmanager
@@ -153,12 +160,43 @@ async def root():
 
 @app.get("/health")
 async def health_check():
+    """Liveness probe — always HTTP 200 so Render does not stop routing on transient DB blips."""
     from app.config import settings
 
-    db = check_database()
+    loop = asyncio.get_running_loop()
+    db = await loop.run_in_executor(None, check_database)
+    openai_configured = bool((settings.openai_api_key or "").strip())
+    return {
+        "status": "healthy" if db["ok"] else "degraded",
+        "startup_ready": _startup_ready,
+        "database": db,
+        "openai": {
+            "configured": openai_configured,
+            "primary_model": settings.openai_primary_model,
+            "vision_model": settings.openai_vision_model,
+            "conversational": settings.openai_conversational_enabled and openai_configured,
+            "dynamic_welcome": settings.openai_dynamic_welcome and openai_configured,
+        },
+    }
+
+
+@app.get("/health/ready")
+async def health_ready():
+    """Readiness probe — fails when startup or database is not ready (use for strict checks)."""
+    from app.config import settings
+
+    if not _startup_ready:
+        return JSONResponse(
+            status_code=503,
+            content={"status": "starting", "startup_ready": False},
+        )
+
+    loop = asyncio.get_running_loop()
+    db = await loop.run_in_executor(None, check_database)
     openai_configured = bool((settings.openai_api_key or "").strip())
     body = {
         "status": "healthy" if db["ok"] else "degraded",
+        "startup_ready": True,
         "database": db,
         "openai": {
             "configured": openai_configured,

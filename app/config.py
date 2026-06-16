@@ -27,7 +27,7 @@ class Settings(BaseSettings):
     db_use_null_pool: bool = True
     db_pool_size: int = 1
     db_max_overflow: int = 0
-    db_pool_recycle: int = 1800
+    db_pool_recycle: int = 280
     db_pool_timeout: int = 10
     db_pool_pre_ping: bool = True
     uvicorn_workers: int = 1

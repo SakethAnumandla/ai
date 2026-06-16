@@ -1,0 +1,28 @@
+# Render Blueprint — https://render.com/docs/blueprint-spec
+# Deploy: connect this repo in Render Dashboard or `render blueprint sync`
+services:
+  - type: web
+    name: bizwy-expense-api
+    runtime: docker
+    plan: starter
+    region: singapore
+    healthCheckPath: /health
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: DB_USE_NULL_POOL
+        value: "true"
+      - key: UVICORN_WORKERS
+        value: "1"
+      - key: UVICORN_LIMIT_CONCURRENCY
+        value: "40"
+      - key: UPLOAD_DIR
+        value: /tmp/bizwy-uploads
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: BIZWY_AUTH_MODE
+        value: hybrid
+      - key: BIZWY_API_BASE_URL
+        value: https://business.bizwy.in/v2
+      - key: CORS_ORIGINS
+        value: "*"
