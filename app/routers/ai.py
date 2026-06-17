@@ -192,7 +192,10 @@ async def ai_chat_action(
     """
     _guard_session(db, scope, body.session_id)
     ctx = _ctx(scope, body.session_id)
-    action = (body.action or "").strip().lower()
+    action = (body.action or "").strip()
+    from app.ai.conversation.post_save import normalize_chat_action, saved_expense_message
+
+    action = normalize_chat_action(action)
     svc = ExpenseService(db)
     expense = svc.get_expense(body.expense_id, scope.user_id, scope.company_id)
     if not expense:
@@ -222,16 +225,27 @@ async def ai_chat_action(
             scope.company_id,
             auto_approve=settings.expense_self_auto_approve_enabled,
         )
-        if updated.status == ExpenseStatus.APPROVED:
-            assistant_text = "Bill saved, thank you!"
-        else:
+        assistant_text = saved_expense_message(updated.status)
+        if updated.status != ExpenseStatus.APPROVED:
             assistant_text = (
                 f"Expense #{updated.id} submitted for approval."
             )
         from app.ai.schemas.chat_ui import post_submit_actions
+        from app.ai.chat_ui import build_workflow_preview_card
 
         extra["ui_actions"] = post_submit_actions(updated.id)
+        card = build_workflow_preview_card(
+            db,
+            expense_id=updated.id,
+            slots={
+                "company_id": scope.company_id,
+                "user_id": scope.user_id,
+            },
+        )
+        if card:
+            extra["expense_previews"] = [card]
         await memory.clear_draft_expense(ctx)
+        await memory.clear_pending_intent(ctx)
         from app.ai.workflow.engine import WorkflowEngine
 
         await memory.set_workflow_state(

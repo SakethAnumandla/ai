@@ -217,7 +217,9 @@ async def handle_expense_create_v1(
             "Say when you want to submit it for approval."
         )
     elif expense.status == ExpenseStatus.APPROVED:
-        message = "Bill saved, thank you!"
+        from app.ai.conversation.post_save import saved_expense_message
+
+        message = saved_expense_message(expense.status)
     else:
         message = (
             f"Done 👍 Submitted '{expense.bill_name}' (₹{expense.bill_amount:,.2f}) for approval."
@@ -409,7 +411,9 @@ async def handle_expense_submit_v1(
         expense_id, user.id, company_id, auto_approve=use_auto
     )
     if updated.status == ExpenseStatus.APPROVED:
-        message = "Bill saved, thank you!"
+        from app.ai.conversation.post_save import saved_expense_message
+
+        message = saved_expense_message(updated.status)
     else:
         message = (
             f"Expense #{updated.id} ({updated.bill_name}, "

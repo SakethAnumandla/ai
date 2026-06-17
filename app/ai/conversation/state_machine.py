@@ -199,8 +199,9 @@ _IMMEDIATE_SUBMIT_RE = re.compile(
 _SKIPPED_SLOTS_KEY = "_skipped_slots"
 _GOT_IT_AFTER_ATTACHMENT = "Got it 👍"
 _POST_SAVE_FOLLOWUP_SLOT = "_awaiting_post_save_followup"
-_POST_SAVE_FOLLOWUP_QUESTION = "Bill saved, thank you!"
-_POST_SAVE_THANK_YOU = "Thank you! Have a great day. 👋"
+from app.ai.conversation.post_save import BILL_SAVED_AND_APPROVED, POST_SAVE_THANK_YOU
+
+_POST_SAVE_FOLLOWUP_QUESTION = BILL_SAVED_AND_APPROVED
 _SUBMIT_CONFIRM_SLOT = "_awaiting_submit_confirm"
 _CREATION_MODE_SLOT = "_awaiting_creation_mode"
 _MANUAL_ATTACHMENT_SLOT = "_awaiting_attachment"

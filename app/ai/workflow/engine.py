@@ -9,9 +9,7 @@ from app.ai.chat_ui import build_workflow_preview_card
 from app.ai.conversation.expense_manage import ExpenseManageWorkflow
 from app.ai.conversation.state_machine import (
     ConversationStateMachine,
-    _POST_SAVE_FOLLOWUP_QUESTION,
     _POST_SAVE_FOLLOWUP_SLOT,
-    _POST_SAVE_THANK_YOU,
 )
 from app.ai.schemas.common import SessionContext, TenantUserContext
 from app.ai.schemas.memory import DraftExpenseContext, PendingIntent
@@ -246,14 +244,19 @@ class WorkflowEngine:
         user_content: str,
         state: ConversationWorkflowState,
     ) -> WorkflowContinueResult:
-        from app.ai.conversation.post_save import is_post_save_accept, is_post_save_decline
+        from app.ai.conversation.post_save import (
+            BILL_SAVED_AND_APPROVED,
+            POST_SAVE_THANK_YOU,
+            is_post_save_accept,
+            is_post_save_decline,
+        )
 
         if is_post_save_decline(user_content):
             await self._memory.clear_workflow_state(ctx)
             await self._memory.clear_pending_intent(ctx)
             return WorkflowContinueResult(
                 handled=True,
-                message=_POST_SAVE_THANK_YOU,
+                message=POST_SAVE_THANK_YOU,
             )
         if is_post_save_accept(user_content):
             await self._memory.clear_workflow_state(ctx)
@@ -264,7 +267,7 @@ class WorkflowEngine:
             )
         return WorkflowContinueResult(
             handled=True,
-            message=_POST_SAVE_FOLLOWUP_QUESTION,
+            message=BILL_SAVED_AND_APPROVED,
         )
 
     @staticmethod

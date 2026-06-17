@@ -1445,16 +1445,31 @@ class AIOrchestrator:
         eid = (tool_result.data or {}).get("expense_id")
         if eid:
             from app.ai.schemas.chat_ui import post_submit_actions
+            from app.ai.chat_ui import build_workflow_preview_card
+            from app.ai.security import scoped_company_id
 
             extra["ui_actions"] = post_submit_actions(int(eid))
+            card = build_workflow_preview_card(
+                self._db,
+                expense_id=int(eid),
+                slots={
+                    "company_id": scoped_company_id(ctx, user),
+                    "user_id": user.id,
+                },
+            )
+            if card:
+                extra["expense_previews"] = [card]
+        await self._memory.clear_draft_expense(ctx)
+        await self._memory.clear_pending_intent(ctx)
         await self._memory.set_workflow_state(
             ctx,
             self._workflow.post_save_followup_state(session_id=ctx.session_id),
         )
+        content = (tool_result.message or "").strip() or _POST_SAVE_FOLLOWUP_QUESTION
         return await self._finalize_chat(
             ctx,
             user,
-            _POST_SAVE_FOLLOWUP_QUESTION,
+            content,
             log_extra,
             tool_results=[tool_result],
             extra=extra,

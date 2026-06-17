@@ -63,6 +63,12 @@ def build_expense_preview_card(
     status = expense.status.value if expense.status else "draft"
     clarify = list(af.fields_needing_clarification or [])
     fields = build_fields_from_prefill(prefill)
+    from app.ai.schemas.chat_ui import post_submit_actions
+
+    if status in ("approved", "submitted"):
+        card_actions = post_submit_actions(expense.id)
+    else:
+        card_actions = default_expense_card_actions(expense.id, status=status)
 
     return ExpensePreviewCard(
         expense_id=expense.id,
@@ -83,7 +89,7 @@ def build_expense_preview_card(
         overall_confidence=result.overall_confidence,
         fields=fields,
         fields_needing_clarification=clarify,
-        actions=default_expense_card_actions(expense.id, status=status),
+        actions=card_actions,
         is_duplicate=result.is_duplicate,
         has_bill_attachment=bool(expense.files),
     )
@@ -175,6 +181,12 @@ def build_workflow_preview_card(
         )
     )
     status = expense.status.value if expense.status else "draft"
+    from app.ai.schemas.chat_ui import post_submit_actions
+
+    if status in ("approved", "submitted"):
+        actions = post_submit_actions(expense.id)
+    else:
+        actions = default_expense_card_actions(expense.id, status=status)
     return ExpensePreviewCard(
         expense_id=expense.id,
         bill_name=expense.bill_name,
@@ -192,6 +204,6 @@ def build_workflow_preview_card(
         thumbnail_url=resp.thumbnail_url if has_bill else None,
         can_preview=bool(resp.can_preview) if has_bill else False,
         fields=fields,
-        actions=default_expense_card_actions(expense.id, status=status),
+        actions=actions,
         has_bill_attachment=has_bill,
     )
