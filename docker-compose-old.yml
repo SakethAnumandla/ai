@@ -1,0 +1,27 @@
+# Single database: set DATABASE_URL in .env (Aiven Postgres).
+#
+# Production-like (code baked into image — rebuild after edits):
+#   docker compose up -d --build
+#
+# Local dev (live reload when ./app changes):
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build
+
+services:
+  backend:
+    build: .
+    platform: linux/amd64
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      DB_USE_NULL_POOL: "true"
+      UVICORN_WORKERS: "1"
+      UVICORN_LIMIT_CONCURRENCY: "40"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import json,urllib.request; r=urllib.request.urlopen('http://127.0.0.1:8000/health/ready'); d=json.load(r); assert d.get('database',{}).get('ok')"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 30s

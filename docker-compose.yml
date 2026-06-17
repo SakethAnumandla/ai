@@ -1,12 +1,17 @@
-# Single database: set DATABASE_URL in .env (Aiven Postgres).
-#
-# Production-like (code baked into image — rebuild after edits):
-#   docker compose up -d --build
-#
-# Local dev (live reload when ./app changes):
-#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build
-
 services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: app_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: expense_tracker
+      POSTGRES_USER: appuser
+      POSTGRES_PASSWORD: StrongPassword123
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
   backend:
     build: .
     platform: linux/amd64
@@ -15,13 +20,29 @@ services:
     env_file:
       - .env
     environment:
+      DATABASE_URL: postgresql://appuser:StrongPassword123@postgres:5432/expense_tracker
+      DB_POOL_SIZE: "2"
+      DB_MAX_OVERFLOW: "1"
+      DB_POOL_RECYCLE: "1800"
+      PADDLE_OCR_PRELOAD: "false"
       DB_USE_NULL_POOL: "true"
       UVICORN_WORKERS: "1"
       UVICORN_LIMIT_CONCURRENCY: "40"
     restart: unless-stopped
+    depends_on:
+      - postgres
     healthcheck:
-      test: ["CMD", "python", "-c", "import json,urllib.request; r=urllib.request.urlopen('http://127.0.0.1:8000/health/ready'); d=json.load(r); assert d.get('database',{}).get('ok')"]
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import json,urllib.request; r=urllib.request.urlopen('http://127.0.0.1:8000/health/ready'); d=json.load(r); assert d.get('database',{}).get('ok')",
+        ]
       interval: 10s
       timeout: 5s
       retries: 6
       start_period: 30s
+
+volumes:
+  postgres_data:
