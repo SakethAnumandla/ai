@@ -6,6 +6,7 @@ from typing import Optional
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
+from app.deps.api_user import ApiUser
 from app.deps.scope import ExpenseScope, assert_expense_owner
 from app.models import Expense, OCRBill, User
 from app.services.expense_approval_service import get_expense_for_viewer
@@ -19,10 +20,12 @@ class ExpenseAccessService:
     def get_user(self, user_id: int) -> Optional[User]:
         return self.db.query(User).filter(User.id == user_id).first()
 
-    def get_for_viewer(self, expense_id: int, user_id: int) -> Expense:
+    def get_for_viewer(self, expense_id: int, user_id: int, company_id: int = 1) -> Expense:
         user = self.get_user(user_id)
         if not user:
-            raise HTTPException(status_code=404, detail="Expense not found")
+            user = ApiUser.from_scope(
+                ExpenseScope(user_id=user_id, company_id=company_id)
+            ).as_orm_user()
         expense = get_expense_for_viewer(self.db, expense_id, user)
         if not expense:
             raise HTTPException(status_code=404, detail="Expense not found")

@@ -203,7 +203,8 @@ class ManualExpenseService:
 
         self.db.commit()
         self.db.refresh(expense)
-        expense = self.access.get_for_viewer(expense.id, user.id)
+        company_id = getattr(user, "company_id", 1)
+        expense = self.access.get_for_viewer(expense.id, user.id, company_id=company_id)
         return build_expense_response(expense)
 
     async def scan_manual_prefill(
@@ -262,7 +263,8 @@ class ManualExpenseService:
             )
 
         self.db.commit()
-        expense = self.access.get_for_viewer(expense.id, user.id)
+        company_id = getattr(user, "company_id", 1)
+        expense = self.access.get_for_viewer(expense.id, user.id, company_id=company_id)
         resp = build_expense_response(expense)
         return BillDraftItem(
             bill_index=1,
