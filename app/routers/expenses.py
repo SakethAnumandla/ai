@@ -58,7 +58,9 @@ def _load_expense(db: Session, expense_id: int, scope: ExpenseScope):
 
 
 @router.get("/approvers/directory")
-async def expense_approver_directory():
+async def expense_approver_directory(
+    _scope: ExpenseScope = Depends(get_expense_scope),
+):
     return {"approvers": APPROVER_DIRECTORY}
 
 

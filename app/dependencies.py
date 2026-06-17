@@ -10,6 +10,8 @@ from datetime import datetime, timedelta
 import logging
 
 from app.database import get_db
+from app.deps.api_user import ApiUser
+from app.deps.scope import ExpenseScope, get_expense_scope
 from app.models import User, ExpenseStatus, MainCategory, TransactionType
 from app.utils.transaction_parser import coerce_transaction_type
 from app.utils.time_period import (
@@ -25,14 +27,16 @@ DEV_USER_EMAIL = "dev@local.test"
 DEV_USER_USERNAME = "devuser"
 
 
-async def get_current_user(db: Session = Depends(get_db)) -> User:
-    """Alias for authenticated user (dev: default user)."""
-    return await get_default_user(db)
+async def get_current_user(
+    scope: ExpenseScope = Depends(get_expense_scope),
+) -> ApiUser:
+    """Request-scoped actor from mandatory user_id + company_id query params."""
+    return ApiUser.from_scope(scope)
 
 
 async def get_current_admin_user(
-    current_user: User = Depends(get_current_user),
-) -> User:
+    current_user: ApiUser = Depends(get_current_user),
+) -> ApiUser:
     if not current_user.is_admin:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -41,50 +45,11 @@ async def get_current_admin_user(
     return current_user
 
 
-async def get_default_user(db: Session = Depends(get_db)) -> User:
-    """Single dev user for local testing (no login required)."""
-    from app.models import UserRole, Department, Wallet
-
-    user = db.query(User).filter(User.username == DEV_USER_USERNAME).first()
-    if user:
-        # Local dev / Postman: full access for finance, executive, manager APIs
-        changed = False
-        if not user.is_admin:
-            user.is_admin = True
-            changed = True
-        if user.role not in (
-            UserRole.SUPER_ADMIN,
-            UserRole.FINANCE_ADMIN,
-            UserRole.MANAGER,
-            UserRole.DEPARTMENT_HEAD,
-        ):
-            user.role = UserRole.SUPER_ADMIN
-            changed = True
-        if changed:
-            db.commit()
-            db.refresh(user)
-        wallet = db.query(Wallet).filter(Wallet.user_id == user.id).first()
-        if not wallet:
-            db.add(Wallet(user_id=user.id, company_id=1))
-            db.commit()
-        return user
-
-    user = User(
-        email=DEV_USER_EMAIL,
-        username=DEV_USER_USERNAME,
-        hashed_password="not-used",
-        full_name="Dev User",
-        is_active=True,
-        is_admin=True,
-        role=UserRole.SUPER_ADMIN,
-        department=Department.ENGINEERING,
-    )
-    db.add(user)
-    db.flush()
-    db.add(Wallet(user_id=user.id, company_id=1))
-    db.commit()
-    db.refresh(user)
-    return user
+async def get_default_user(
+    scope: ExpenseScope = Depends(get_expense_scope),
+) -> ApiUser:
+    """Alias for API-scoped user (no local users table lookup)."""
+    return ApiUser.from_scope(scope)
 
 # ==================== Pagination Dependencies ====================
 

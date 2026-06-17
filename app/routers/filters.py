@@ -1,5 +1,7 @@
 """Filter metadata for mobile/web clients."""
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
+
+from app.deps.scope import ExpenseScope, get_expense_scope
 
 from app.utils.time_period import (
     DATE_FILTER_PARAMS,
@@ -12,7 +14,7 @@ router = APIRouter(prefix="/filters", tags=["filters"])
 
 
 @router.get("/time-periods")
-async def list_time_periods():
+async def list_time_periods(_scope: ExpenseScope = Depends(get_expense_scope)):
     """
     Time filters for dashboard, wallet, and expenses.
 

@@ -89,8 +89,9 @@ def _resolve_authorization(
 async def get_expense_scope(
   authorization: Optional[str] = Header(None, alias="Authorization"),
   access_token: Optional[str] = Query(None),
-  user_id: Optional[int] = Query(None),
-  company_id: Optional[int] = Query(None),
+  user_id: int = Query(..., ge=1, description="Bizwy user id (required)"),
+  company_id: int = Query(..., ge=1, description="Bizwy company id (required)"),
+  user_type: Optional[str] = Query(None, description="Optional Bizwy role hint (e.g. finance_admin)"),
   country_currency: Optional[str] = Query(None, alias="country_currency"),
 ) -> ExpenseScope:
   scope = bizwy_client.resolve_user(
@@ -98,6 +99,7 @@ async def get_expense_scope(
     user_id=user_id,
     company_id=company_id,
     currency=country_currency,
+    user_type=user_type,
   )
   return ExpenseScope.from_bizwy(scope)
 
@@ -105,8 +107,9 @@ async def get_expense_scope(
 async def get_company_scope(
   authorization: Optional[str] = Header(None, alias="Authorization"),
   access_token: Optional[str] = Query(None),
-  user_id: Optional[int] = Query(None),
-  company_id: Optional[int] = Query(None),
+  user_id: int = Query(..., ge=1, description="Bizwy user id (required)"),
+  company_id: int = Query(..., ge=1, description="Bizwy company id (required)"),
+  user_type: Optional[str] = Query(None, description="Optional Bizwy role hint (e.g. finance_admin)"),
   country_currency: Optional[str] = Query(None, alias="country_currency"),
 ) -> CompanyScope:
   scope = bizwy_client.resolve_user(
@@ -114,6 +117,7 @@ async def get_company_scope(
     user_id=user_id,
     company_id=company_id,
     currency=country_currency,
+    user_type=user_type,
   )
   return CompanyScope.from_bizwy(scope)
 

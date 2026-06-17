@@ -1,7 +1,7 @@
 # models.py - Complete with Policy & Claims Support
 from sqlalchemy import Column, Integer, String, Float, DateTime, Enum, ForeignKey, Text, JSON, Boolean, LargeBinary, Index
 from sqlalchemy.sql import func
-from sqlalchemy.orm import relationship, validates
+from sqlalchemy.orm import relationship, validates, foreign
 from app.database import Base
 import enum
 
@@ -262,21 +262,42 @@ class User(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
     
-    # Relationships
+    # Relationships (logical only — user_id is external Bizwy id, no DB FK)
     expenses = relationship(
         "Expense",
-        back_populates="user",
-        foreign_keys="Expense.user_id",
-        cascade="all, delete-orphan",
+        primaryjoin="User.id == foreign(Expense.user_id)",
+        viewonly=True,
     )
-    wallet = relationship("Wallet", back_populates="user", uselist=False, cascade="all, delete-orphan")
-    ocr_bills = relationship("OCRBill", back_populates="user", cascade="all, delete-orphan")
-    ocr_batches = relationship("OCRBatch", back_populates="user", cascade="all, delete-orphan")
+    wallet = relationship(
+        "Wallet",
+        primaryjoin="User.id == foreign(Wallet.user_id)",
+        uselist=False,
+        viewonly=True,
+    )
+    ocr_bills = relationship(
+        "OCRBill",
+        primaryjoin="User.id == foreign(OCRBill.user_id)",
+        viewonly=True,
+    )
+    ocr_batches = relationship(
+        "OCRBatch",
+        primaryjoin="User.id == foreign(OCRBatch.user_id)",
+        viewonly=True,
+    )
     
     # Policy relationships
     policies_created = relationship("Policy", foreign_keys="Policy.created_by", cascade="all, delete-orphan")
-    claims = relationship("Claim", foreign_keys="Claim.user_id", cascade="all, delete-orphan")
-    approvals = relationship("ClaimApproval", foreign_keys="ClaimApproval.approver_id", cascade="all, delete-orphan")
+    claims = relationship(
+        "Claim",
+        primaryjoin="User.id == foreign(Claim.user_id)",
+        viewonly=True,
+    )
+    approvals = relationship(
+        "ClaimApproval",
+        primaryjoin="User.id == foreign(ClaimApproval.approver_id)",
+        viewonly=True,
+        overlaps="approvals",
+    )
     
     # Manager relationship
     manager = relationship("User", remote_side=[id], foreign_keys=[manager_id])
@@ -367,7 +388,7 @@ class Claim(Base):
     id = Column(Integer, primary_key=True, index=True)
     claim_number = Column(String, unique=True, index=True, nullable=False)  # CLM-2024-001
     policy_id = Column(Integer, ForeignKey("policies.id", ondelete="RESTRICT"), nullable=False)
-    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    user_id = Column(Integer, nullable=False, index=True)
     
     # Claim Details
     bill_name = Column(String, nullable=False)
@@ -424,7 +445,12 @@ class Claim(Base):
     
     # Relationships
     policy = relationship("Policy", back_populates="claims")
-    user = relationship("User", foreign_keys=[user_id], overlaps="claims")
+    user = relationship(
+        "User",
+        primaryjoin="foreign(Claim.user_id) == User.id",
+        viewonly=True,
+        overlaps="claims",
+    )
     approvals = relationship("ClaimApproval", back_populates="claim", cascade="all, delete-orphan")
     expense = relationship("Expense", back_populates="claim", uselist=False)
 
@@ -467,7 +493,12 @@ class ClaimApproval(Base):
     
     # Relationships
     claim = relationship("Claim", back_populates="approvals")
-    approver = relationship("User", foreign_keys=[approver_id], overlaps="approvals")
+    approver = relationship(
+        "User",
+        primaryjoin="foreign(ClaimApproval.approver_id) == User.id",
+        viewonly=True,
+        overlaps="approvals",
+    )
     
     __table_args__ = (
         Index('ix_claim_approvals_claim_status', 'claim_id', 'status'),
@@ -480,7 +511,7 @@ class Expense(Base):
     __tablename__ = "expenses"
     
     id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    user_id = Column(Integer, nullable=False, index=True)
     company_id = Column(Integer, nullable=False, default=1, index=True)
 
     # Basic fields
@@ -543,17 +574,25 @@ class Expense(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
     approved_at = Column(DateTime(timezone=True))
-    approved_by = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    approved_by = Column(Integer, nullable=True)
     
     # Relationships
-    user = relationship("User", back_populates="expenses", foreign_keys=[user_id])
+    user = relationship(
+        "User",
+        primaryjoin="foreign(Expense.user_id) == User.id",
+        viewonly=True,
+    )
     files = relationship("ExpenseFile", back_populates="expense", cascade="all, delete-orphan")
     tax_lines = relationship(
         "ExpenseTax", back_populates="expense", cascade="all, delete-orphan"
     )
     wallet_transaction = relationship("WalletTransaction", back_populates="expense", uselist=False, cascade="all, delete-orphan")
     ocr_bills = relationship("OCRBill", back_populates="expense", cascade="all, delete-orphan")
-    approver = relationship("User", foreign_keys=[approved_by])
+    approver = relationship(
+        "User",
+        primaryjoin="foreign(Expense.approved_by) == User.id",
+        viewonly=True,
+    )
     claim = relationship("Claim", back_populates="expense")
     approval_steps = relationship(
         "ExpenseApproval",
@@ -583,7 +622,7 @@ class ExpenseApproval(Base):
     expense_id = Column(Integer, ForeignKey("expenses.id", ondelete="CASCADE"), nullable=False)
     approval_level = Column(String(32), nullable=False)  # manager, hod, hr, director, finance, …
     sequence_order = Column(Integer, nullable=False, default=1)
-    approver_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    approver_id = Column(Integer, nullable=True)
     approver_name = Column(String(128), nullable=True)
     approver_role_label = Column(String(64), nullable=True)
     status = Column(Enum(ApprovalStatus), default=ApprovalStatus.PENDING)
@@ -592,7 +631,11 @@ class ExpenseApproval(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     expense = relationship("Expense", back_populates="approval_steps")
-    approver = relationship("User", foreign_keys=[approver_id])
+    approver = relationship(
+        "User",
+        primaryjoin="foreign(ExpenseApproval.approver_id) == User.id",
+        viewonly=True,
+    )
 
     __table_args__ = (
         Index("ix_expense_approvals_expense_seq", "expense_id", "sequence_order"),
@@ -611,7 +654,7 @@ class AIChatSession(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     tenant_id = Column(Integer, nullable=False, index=True)
-    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    user_id = Column(Integer, nullable=False, index=True)
     session_id = Column(String(64), nullable=False, index=True)
     title = Column(String(200), nullable=True)
     is_active = Column(Boolean, default=True)
@@ -691,7 +734,7 @@ class OCRBatch(Base):
     __tablename__ = "ocr_batches"
 
     id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    user_id = Column(Integer, nullable=False, index=True)
     company_id = Column(Integer, nullable=False, default=1, index=True)
     batch_name = Column(String, nullable=True)
     total_files = Column(Integer, default=0)
@@ -701,7 +744,11 @@ class OCRBatch(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     completed_at = Column(DateTime(timezone=True), nullable=True)
 
-    user = relationship("User", back_populates="ocr_batches")
+    user = relationship(
+        "User",
+        primaryjoin="foreign(OCRBatch.user_id) == User.id",
+        viewonly=True,
+    )
     ocr_bills = relationship("OCRBill", back_populates="batch")
 
 
@@ -709,7 +756,7 @@ class OCRBill(Base):
     __tablename__ = "ocr_bills"
     
     id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    user_id = Column(Integer, nullable=False, index=True)
     company_id = Column(Integer, nullable=False, default=1, index=True)
     expense_id = Column(Integer, ForeignKey("expenses.id", ondelete="SET NULL"), nullable=True)
     batch_id = Column(Integer, ForeignKey("ocr_batches.id", ondelete="SET NULL"), nullable=True)
@@ -783,7 +830,11 @@ class OCRBill(Base):
     processed_by = Column(String)
     
     # Relationships
-    user = relationship("User", back_populates="ocr_bills")
+    user = relationship(
+        "User",
+        primaryjoin="foreign(OCRBill.user_id) == User.id",
+        viewonly=True,
+    )
     expense = relationship("Expense", back_populates="ocr_bills")
     batch = relationship("OCRBatch", back_populates="ocr_bills")
 
@@ -801,7 +852,7 @@ class ProcessingJob(Base):
     __tablename__ = "processing_jobs"
 
     id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    user_id = Column(Integer, nullable=False, index=True)
     tenant_id = Column(Integer, nullable=False, index=True)
     job_type = Column(String(64), nullable=False, index=True)
     status = Column(String(32), default=ProcessingJobStatus.PENDING.value, index=True)
@@ -821,7 +872,7 @@ class VoiceTranscriptionAudit(Base):
     __tablename__ = "voice_transcription_audits"
 
     id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    user_id = Column(Integer, nullable=False, index=True)
     tenant_id = Column(Integer, nullable=False, index=True)
     job_id = Column(Integer, ForeignKey("processing_jobs.id", ondelete="SET NULL"), nullable=True)
     session_id = Column(String(64), nullable=True)
@@ -842,7 +893,7 @@ class Wallet(Base):
     __tablename__ = "wallets"
     
     id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    user_id = Column(Integer, nullable=False, index=True)
     company_id = Column(Integer, nullable=False, default=1, index=True)
     balance = Column(Float, default=0.0)
     total_income = Column(Float, default=0.0)
@@ -851,7 +902,11 @@ class Wallet(Base):
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
     
     # Relationships
-    user = relationship("User", back_populates="wallet")
+    user = relationship(
+        "User",
+        primaryjoin="foreign(Wallet.user_id) == User.id",
+        viewonly=True,
+    )
     transactions = relationship("WalletTransaction", back_populates="wallet", cascade="all, delete-orphan")
 
     __table_args__ = (
@@ -890,7 +945,7 @@ class Budget(Base):
     __tablename__ = "budgets"
     
     id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    user_id = Column(Integer, nullable=False, index=True)
     company_id = Column(Integer, nullable=False, default=1, index=True)
     main_category = Column(Enum(MainCategory), nullable=False)
     sub_category = Column(String, nullable=True)
@@ -903,7 +958,11 @@ class Budget(Base):
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
     
     # Relationships
-    user = relationship("User")
+    user = relationship(
+        "User",
+        primaryjoin="foreign(Budget.user_id) == User.id",
+        viewonly=True,
+    )
     
     __table_args__ = (
         Index('ix_budgets_user_category_month', 'user_id', 'main_category', 'month', 'year', unique=True),

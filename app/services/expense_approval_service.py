@@ -77,14 +77,17 @@ def _user_role_from_bizwy_type(user_type: Optional[str]) -> UserRole:
 def load_approval_actor(
     db: Session, user_id: int, *, bizwy_user_type: Optional[str] = None
 ) -> User:
-    """Load DB user for approval checks; synthesize minimal row if absent."""
-    row = db.query(User).filter(User.id == user_id).first()
-    if row:
-        return row
+    """Synthetic approver actor from API user_id (no local users table lookup)."""
+    _ = db
+    role = _user_role_from_bizwy_type(bizwy_user_type)
     return User(
-        id=user_id,
+        id=int(user_id),
+        email=f"user_{user_id}@api.local",
         username=f"user_{user_id}",
-        role=_user_role_from_bizwy_type(bizwy_user_type),
+        hashed_password="not-used",
+        is_active=True,
+        is_admin=role in (UserRole.SUPER_ADMIN, UserRole.FINANCE_ADMIN),
+        role=role,
     )
 
 
@@ -534,9 +537,7 @@ def approve_expense_current_step(
     if not pending:
         raise ValueError("No pending approval step for this expense")
     if user is None:
-        user = db.query(User).filter(User.id == expense.user_id).first()
-    if not user:
-        raise ValueError("User not found")
+        user = load_approval_actor(db, expense.user_id, bizwy_user_type=bizwy_user_type)
     return process_expense_approval(
         db,
         approval_id=pending.id,

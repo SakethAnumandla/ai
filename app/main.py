@@ -3,13 +3,14 @@ import logging
 from contextlib import asynccontextmanager
 from urllib.parse import urlparse
 
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy.exc import OperationalError, SQLAlchemyError
 
 from app.config import settings
 from app.database import engine, Base, dispose_engine, check_database
+from app.deps.scope import ExpenseScope, get_expense_scope
 from app.routers import expenses, ocr, wallet, dashboard, policies, claims, approvals, categories, tax, ai, ai_memory, intelligence, manager, finance, executive, filters, expense_workflow
 from app.schemas import get_all_categories, get_category_hierarchy, get_policy_types
 from app.ai.dependencies import shutdown_ai_services
@@ -61,8 +62,10 @@ async def _run_startup_init() -> None:
         await loop.run_in_executor(None, _migrate_business)
         await loop.run_in_executor(None, _migrate_submitted_by)
         from app.migrations.add_expense_company_scope import run as _migrate_company_scope
+        from app.migrations.drop_external_user_fk import run as _migrate_drop_user_fk
 
         await loop.run_in_executor(None, _migrate_company_scope)
+        await loop.run_in_executor(None, _migrate_drop_user_fk)
     except Exception as exc:
         logger.warning("startup_init: %s", exc)
     finally:
@@ -212,22 +215,22 @@ async def health_ready():
 
 
 @app.get("/categories")
-async def list_categories():
+async def list_categories(_scope: ExpenseScope = Depends(get_expense_scope)):
     return get_all_categories()
 
 
 @app.get("/categories/hierarchy")
-async def category_hierarchy():
+async def category_hierarchy(_scope: ExpenseScope = Depends(get_expense_scope)):
     return get_category_hierarchy()
 
 
 @app.get("/policy-types")
-async def policy_types():
+async def policy_types(_scope: ExpenseScope = Depends(get_expense_scope)):
     return {"policy_types": get_policy_types()}
 
 
 @app.get("/payment-modes")
-async def payment_modes():
+async def payment_modes(_scope: ExpenseScope = Depends(get_expense_scope)):
     from app.utils.payment_modes import list_payment_modes
 
     return list_payment_modes()

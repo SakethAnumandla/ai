@@ -48,7 +48,7 @@ class AIConversation(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     tenant_id = Column(Integer, nullable=False, index=True)
-    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    user_id = Column(Integer, nullable=False, index=True)
     session_id = Column(String(64), nullable=False)
     role = Column(String(32), nullable=False)
     content = Column(Text, nullable=False)
@@ -65,7 +65,7 @@ class AIMemory(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     tenant_id = Column(Integer, nullable=False, index=True)
-    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    user_id = Column(Integer, nullable=False, index=True)
     memory_type = Column(String(32), nullable=False)
     memory_key = Column(String(255), nullable=False)
     value = Column(JSON, nullable=False, default=dict)
@@ -80,7 +80,7 @@ class AISummary(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     tenant_id = Column(Integer, nullable=False, index=True)
-    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    user_id = Column(Integer, nullable=False, index=True)
     session_id = Column(String(64), nullable=False)
     summary_text = Column(Text, nullable=False)
     token_count_before = Column(Integer, default=0)
@@ -122,7 +122,7 @@ class AIIdempotencyRecord(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     tenant_id = Column(Integer, nullable=False, index=True)
-    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    user_id = Column(Integer, nullable=False, index=True)
     idempotency_key = Column(String(128), nullable=False)
     action_type = Column(String(64), nullable=False)
     response_payload = Column(JSON, nullable=False, default=dict)
@@ -136,7 +136,7 @@ class AIConfirmation(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     tenant_id = Column(Integer, nullable=False, index=True)
-    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    user_id = Column(Integer, nullable=False, index=True)
     session_id = Column(String(64), nullable=False)
     confirmation_token = Column(String(64), nullable=False, unique=True, index=True)
     tool_name = Column(String(128), nullable=False)
@@ -213,7 +213,7 @@ class AIMemoryAuditEvent(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     tenant_id = Column(Integer, nullable=False, index=True)
-    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    user_id = Column(Integer, nullable=False, index=True)
     memory_key = Column(String(255), nullable=False)
     change_type = Column(String(64), nullable=False)
     source = Column(String(128), nullable=True)
@@ -232,7 +232,7 @@ class AIJobDeadLetter(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     tenant_id = Column(Integer, nullable=False, index=True)
-    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    user_id = Column(Integer, nullable=False, index=True)
     session_id = Column(String(64), nullable=True)
     job_type = Column(String(128), nullable=False)
     payload = Column(JSON, nullable=False, default=dict)
@@ -254,7 +254,7 @@ class AIAction(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     tenant_id = Column(Integer, nullable=False, index=True)
-    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    user_id = Column(Integer, nullable=False, index=True)
     session_id = Column(String(64), nullable=True)
     request_id = Column(String(64), nullable=True, index=True)
     trace_id = Column(String(64), nullable=True, index=True)

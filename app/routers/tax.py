@@ -1,7 +1,9 @@
 """Simplified tax configuration for expense entry (no country selection)."""
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
+
+from app.deps.scope import ExpenseScope, get_expense_scope
 
 from app.utils.tax_regimes import (
     TAX_REGIMES,
@@ -14,7 +16,7 @@ router = APIRouter(prefix="/tax", tags=["tax"])
 
 
 @router.get("/config")
-async def tax_entry_config():
+async def tax_entry_config(_scope: ExpenseScope = Depends(get_expense_scope)):
     """
     Tax UI configuration for manual expense entry.
     Users add multiple taxes with custom labels and either % or fixed value.
@@ -38,7 +40,7 @@ async def tax_entry_config():
 
 
 @router.get("/types")
-async def list_tax_types():
+async def list_tax_types(_scope: ExpenseScope = Depends(get_expense_scope)):
     """Common tax label suggestions (optional; users can enter any label)."""
     return {
         "suggested_labels": [
@@ -50,7 +52,10 @@ async def list_tax_types():
 
 
 @router.get("/regimes")
-async def list_tax_regimes(country: Optional[str] = Query(None, description="ISO country code, e.g. IN")):
+async def list_tax_regimes(
+    country: Optional[str] = Query(None, description="ISO country code, e.g. IN"),
+    _scope: ExpenseScope = Depends(get_expense_scope),
+):
     """
     Country tax regimes for manual expense entry and policy defaults.
     Without `country`, returns all supported countries plus full regime catalog.

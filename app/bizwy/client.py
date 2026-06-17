@@ -78,6 +78,7 @@ class BizwyClient:
     user_id: Optional[int],
     company_id: Optional[int],
     currency: Optional[str] = None,
+    user_type: Optional[str] = None,
   ) -> BizwyScope:
     if user_id is None or company_id is None:
       raise HTTPException(
@@ -88,6 +89,7 @@ class BizwyClient:
       user_id=int(user_id),
       company_id=int(company_id),
       currency=currency,
+      user_type=user_type,
     )
 
   def _get_cached(self, token: str) -> Optional[BizwyScope]:
@@ -217,24 +219,33 @@ class BizwyClient:
     user_id: Optional[int] = None,
     company_id: Optional[int] = None,
     currency: Optional[str] = None,
+    user_type: Optional[str] = None,
   ) -> BizwyScope:
+    if user_id is None or company_id is None:
+      raise HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail="user_id and company_id are required query parameters",
+      )
+
     mode = (settings.bizwy_auth_mode or "hybrid").strip().lower()
     if mode == "dev":
       return self.resolve_from_query(
-        user_id=user_id, company_id=company_id, currency=currency
+        user_id=user_id,
+        company_id=company_id,
+        currency=currency,
+        user_type=user_type,
       )
 
     has_auth = bool(authorization and str(authorization).strip())
-    has_query = self._query_scope_available(user_id=user_id, company_id=company_id)
     allow_query_fallback = bool(settings.bizwy_token_query_fallback)
 
     if not has_auth:
       if mode == "hybrid" or (mode == "token" and allow_query_fallback):
-        return self._resolve_from_query_with_mode(
+        return self.resolve_from_query(
           user_id=user_id,
           company_id=company_id,
           currency=currency,
-          mode=mode,
+          user_type=user_type,
         )
       raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
@@ -246,7 +257,6 @@ class BizwyClient:
     except HTTPException as exc:
       can_fallback = (
         allow_query_fallback
-        and has_query
         and mode in {"hybrid", "token"}
         and exc.status_code in {
           status.HTTP_401_UNAUTHORIZED,
@@ -259,18 +269,23 @@ class BizwyClient:
           "bizwy.resolve_user token_validation_failed status=%s; using query scope",
           exc.status_code,
         )
-        return self._resolve_from_query_with_mode(
+        return self.resolve_from_query(
           user_id=user_id,
           company_id=company_id,
           currency=currency,
-          mode=mode,
+          user_type=user_type or scope.user_type,
         )
       raise
 
     self._assert_scope_matches_query(
       scope, user_id=user_id, company_id=company_id
     )
-    return scope
+    return self.resolve_from_query(
+      user_id=user_id,
+      company_id=company_id,
+      currency=currency or scope.currency,
+      user_type=user_type or scope.user_type,
+    )
 
 
 bizwy_client = BizwyClient()

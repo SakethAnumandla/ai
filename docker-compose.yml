@@ -10,7 +10,7 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
     ports:
-      - "5432:5432"
+      - "5434:5432"   # DBeaver: localhost:5434 (Mac Postgres uses 5432)
 
   backend:
     build: .
