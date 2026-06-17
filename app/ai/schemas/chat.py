@@ -12,6 +12,18 @@ class ChatRequest(BaseModel):
     session_id: str = Field(..., min_length=8, max_length=64)
 
 
+class ChatActionRequest(BaseModel):
+    """Preview-card button actions from the chat client."""
+
+    session_id: str = Field(..., min_length=8, max_length=64)
+    action: str = Field(..., description="submit | edit | delete")
+    expense_id: int = Field(..., ge=1)
+    fields: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Optional field updates when action=edit",
+    )
+
+
 class ChatResponse(BaseModel):
     message: ConversationMessageOut
     session_id: str

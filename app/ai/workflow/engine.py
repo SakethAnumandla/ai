@@ -289,6 +289,8 @@ class WorkflowEngine:
         state: ConversationWorkflowState,
     ) -> None:
         state.session_id = ctx.session_id
+        state.slots["company_id"] = ctx.scoped_company_id
+        state.slots["user_id"] = ctx.user_id
         await self._memory.set_workflow_state(ctx, state)
         intent_type = "expense_create"
         if state.workflow_type == WorkflowType.EXPENSE_DELETE:

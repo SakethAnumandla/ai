@@ -63,6 +63,12 @@ def is_edit_request(text: str) -> bool:
 def is_submit_button(text: str) -> bool:
     """Match UI button label or short submit intent."""
     stripped = (text or "").strip().lower()
-    if stripped in ("submit", "submit for approval", "submit expense"):
+    if stripped in (
+        "submit",
+        "submit for approval",
+        "submit expense",
+        "save expense",
+        "save",
+    ):
         return True
     return bool(re.match(r"^submit\s+for\s+approval", stripped, re.I))

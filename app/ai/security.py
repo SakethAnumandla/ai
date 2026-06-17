@@ -59,9 +59,9 @@ def build_session_context_from_scope(scope: ExpenseScope, session_id: str) -> Se
 def scoped_company_id(
     ctx: SessionContext, user: Optional[User] = None
 ) -> int:
-    if user is not None and getattr(user, "company_id", None) is not None:
-        return int(user.company_id)
-    return int(getattr(ctx, "company_id", None) or ctx.tenant_id)
+    """Prefer request/session scope (query param) over the ORM user row."""
+    _ = user
+    return int(ctx.scoped_company_id)
 
 
 def tenant_user_from_ctx(ctx: SessionContext) -> TenantUserContext:

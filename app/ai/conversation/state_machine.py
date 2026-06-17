@@ -199,9 +199,7 @@ _IMMEDIATE_SUBMIT_RE = re.compile(
 _SKIPPED_SLOTS_KEY = "_skipped_slots"
 _GOT_IT_AFTER_ATTACHMENT = "Got it 👍"
 _POST_SAVE_FOLLOWUP_SLOT = "_awaiting_post_save_followup"
-_POST_SAVE_FOLLOWUP_QUESTION = (
-    "Your expense has been saved. Is there anything else I can help you with?"
-)
+_POST_SAVE_FOLLOWUP_QUESTION = "Bill saved, thank you!"
 _POST_SAVE_THANK_YOU = "Thank you! Have a great day. 👋"
 _SUBMIT_CONFIRM_SLOT = "_awaiting_submit_confirm"
 _CREATION_MODE_SLOT = "_awaiting_creation_mode"

@@ -93,7 +93,8 @@ def test_post_save_followup_state_factory():
 
 
 def test_post_save_followup_question_constant():
-    assert "anything else" in _POST_SAVE_FOLLOWUP_QUESTION.lower()
+    assert "bill saved" in _POST_SAVE_FOLLOWUP_QUESTION.lower()
+    assert "thank" in _POST_SAVE_FOLLOWUP_QUESTION.lower()
 
 
 def test_format_bill_date_display_from_iso():

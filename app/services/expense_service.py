@@ -122,7 +122,11 @@ class ExpenseService:
             .options(joinedload(Expense.files), joinedload(Expense.tax_lines))
             .filter(Expense.id == expense_id)
         )
-        return _expense_owner_filter(query, user_id, company_id).first()
+        expense = _expense_owner_filter(query, user_id, company_id).first()
+        if expense or company_id is None:
+            return expense
+        # Chat/OCR drafts may have been stored under a legacy company_id — still owned by user.
+        return _expense_owner_filter(query, user_id, None).first()
     
     def get_user_expenses(
         self,

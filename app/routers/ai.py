@@ -22,7 +22,7 @@ from app.ai.receipt_chat import (
     merge_multimodal_with_draft_context,
     run_chat_receipt_scans,
 )
-from app.ai.schemas.chat import ChatRequest, ChatResponse
+from app.ai.schemas.chat import ChatActionRequest, ChatRequest, ChatResponse
 from app.ai.schemas.memory import PendingIntent
 from app.ai.schemas.chat_ui import ChatUIAction, ExpensePreviewCard, CategoryPickerPayload
 from app.ai.models.entities import AIConversation, ConversationRole
@@ -32,8 +32,10 @@ from app.ai.services.memory_service import MemoryService
 from app.config import settings
 from app.database import get_db
 from app.deps.scope import ExpenseScope, get_expense_scope
-from app.models import AIChatSession, User
+from app.models import AIChatSession, ExpenseStatus, User
 from sqlalchemy import desc, func
+from app.schemas import ExpenseUpdate
+from app.services.expense_service import ExpenseService
 from app.utils.file_upload import process_multiple_files
 from app.utils.async_io import run_blocking
 
@@ -177,6 +179,127 @@ async def ai_chat(
     )
 
 
+@router.post("/chat/action", response_model=ChatResponse)
+async def ai_chat_action(
+    body: ChatActionRequest,
+    scope: ExpenseScope = Depends(get_expense_scope),
+    db: Session = Depends(get_db),
+    orchestrator: AIOrchestrator = Depends(get_ai_orchestrator),
+    memory: MemoryService = Depends(get_ai_memory_service),
+):
+    """
+    Handle preview-card buttons (Save expense / Edit / Delete) from the chat UI.
+    """
+    _guard_session(db, scope, body.session_id)
+    ctx = _ctx(scope, body.session_id)
+    action = (body.action or "").strip().lower()
+    svc = ExpenseService(db)
+    expense = svc.get_expense(body.expense_id, scope.user_id, scope.company_id)
+    if not expense:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Expense {body.expense_id} not found",
+        )
+
+    assistant_text: str
+    extra: dict = {}
+
+    if action == "submit":
+        if expense.status not in (
+            ExpenseStatus.DRAFT,
+            ExpenseStatus.PENDING,
+            ExpenseStatus.REJECTED,
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Cannot submit expense in status {expense.status.value}",
+            )
+        from app.config import settings
+
+        updated = svc.submit_for_approval(
+            body.expense_id,
+            scope.user_id,
+            scope.company_id,
+            auto_approve=settings.expense_self_auto_approve_enabled,
+        )
+        if updated.status == ExpenseStatus.APPROVED:
+            assistant_text = "Bill saved, thank you!"
+        else:
+            assistant_text = (
+                f"Expense #{updated.id} submitted for approval."
+            )
+        from app.ai.schemas.chat_ui import post_submit_actions
+
+        extra["ui_actions"] = post_submit_actions(updated.id)
+        await memory.clear_draft_expense(ctx)
+        from app.ai.workflow.engine import WorkflowEngine
+
+        await memory.set_workflow_state(
+            ctx, WorkflowEngine.post_save_followup_state(session_id=body.session_id)
+        )
+    elif action == "delete":
+        svc.delete_expense(body.expense_id, scope.user_id, company_id=scope.company_id)
+        assistant_text = f"Expense #{body.expense_id} deleted."
+        await memory.clear_draft_expense(ctx)
+        await memory.clear_workflow_state(ctx)
+    elif action == "edit":
+        if body.fields:
+            update_fields = {
+                k: v for k, v in body.fields.items() if v is not None and k != "files"
+            }
+            if update_fields:
+                svc.update_expense(
+                    body.expense_id,
+                    scope.user_id,
+                    ExpenseUpdate(**update_fields),
+                    company_id=scope.company_id,
+                )
+                expense = svc.get_expense(
+                    body.expense_id, scope.user_id, scope.company_id
+                )
+            assistant_text = "Expense updated."
+        else:
+            from app.ai.schemas.chat_ui import edit_field_actions
+
+            assistant_text = "Which field would you like to change?"
+            extra["ui_actions"] = edit_field_actions()
+        from app.ai.chat_ui import build_workflow_preview_card
+
+        if expense:
+            card = build_workflow_preview_card(
+                db,
+                expense_id=expense.id,
+                slots={
+                    "company_id": scope.company_id,
+                    "user_id": scope.user_id,
+                },
+            )
+            if card:
+                extra["expense_previews"] = [card]
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unsupported action: {body.action}",
+        )
+
+    await orchestrator.store_memory(
+        ctx,
+        ConversationMessageCreate(
+            role=ConversationRole.USER,
+            content=f"{action} expense #{body.expense_id}",
+        ),
+    )
+    assistant_msg = await orchestrator.store_memory(
+        ctx,
+        ConversationMessageCreate(role=ConversationRole.ASSISTANT, content=assistant_text),
+    )
+    return _build_chat_response(
+        {"message": assistant_msg, "session_id": body.session_id},
+        expense_previews=extra.get("expense_previews"),
+        ui_actions=extra.get("ui_actions"),
+    )
+
+
 @router.post("/chat/upload", response_model=ChatResponse)
 async def ai_chat_with_attachments(
     request: Request,
@@ -292,6 +415,7 @@ async def ai_chat_with_attachments(
         user,
         file_infos,
         user_message=message,
+        company_id=scope.company_id,
     )
     for draft in scan.draft_contexts:
         await memory.set_draft_expense(ctx, draft)

@@ -22,6 +22,7 @@ class MultiFileUploadHandler:
 
     @staticmethod
     async def process_multiple_files(files: List[UploadFile]) -> List[Dict]:
+        files = [f for f in (files or []) if getattr(f, "filename", None)]
         if not files:
             return []
 

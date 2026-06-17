@@ -394,6 +394,17 @@ async def update_expense(
     return build_expense_response(_load_expense(db, expense.id, current_user))
 
 
+@router.put("/{expense_id}", response_model=ExpenseResponse)
+async def update_expense_put(
+    expense_id: int,
+    body: ExpenseUpdate,
+    db: Session = Depends(get_db),
+    current_user: ExpenseScope = Depends(get_expense_scope),
+):
+    """Alias for PATCH — some clients send PUT for expense edits."""
+    return await update_expense(expense_id, body, db, current_user)
+
+
 @router.post("/{expense_id}/approve", response_model=ExpenseResponse)
 async def approve_expense(
     expense_id: int,

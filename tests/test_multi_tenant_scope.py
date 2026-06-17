@@ -277,6 +277,28 @@ class TestManualExpenseApi:
             db.query(Expense).filter(Expense.id == eid).delete()
             db.commit()
 
+    def test_manual_expense_without_file_confirm_submit(self, client: TestClient, db: Session):
+        r = client.post(
+            "/expenses/manual",
+            params=scope_params(USER_A),
+            data={
+                "bill_name": "Lunch no attachment",
+                "bill_amount": "250",
+                "bill_date": "2026-06-16",
+                "main_category": "food",
+                "confirm_submit": "true",
+            },
+        )
+        assert r.status_code == 201, r.text[:500]
+        body = r.json()
+        eid = body["id"]
+        try:
+            assert body["bill_name"] == "Lunch no attachment"
+            assert body["status"] in ("submitted", "approved", "draft")
+        finally:
+            db.query(Expense).filter(Expense.id == eid).delete()
+            db.commit()
+
     def test_manual_expense_with_file_creates_draft(self, client: TestClient, db: Session):
         png = io.BytesIO(
             b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01"

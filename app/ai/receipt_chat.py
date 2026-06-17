@@ -158,9 +158,15 @@ def run_chat_receipt_scans(
     *,
     user_message: str = "",
     force_rescan: bool = False,
+    company_id: Optional[int] = None,
 ) -> ChatReceiptScanOutcome:
     pipeline = ReceiptIntelligencePipeline(db)
     outcome = ChatReceiptScanOutcome()
+    resolved_company_id = (
+        int(company_id)
+        if company_id is not None
+        else int(getattr(user, "company_id", None) or 1)
+    )
 
     for idx, file_info in enumerate(file_infos):
         name = file_info.get("file_name") or f"file-{idx + 1}"
@@ -170,6 +176,7 @@ def run_chat_receipt_scans(
                 file_info,
                 bill_index=idx,
                 force_rescan=force_rescan,
+                company_id=resolved_company_id,
             )
             outcome.results.append(result)
             outcome.draft_contexts.append(pipeline.build_draft_context(result))

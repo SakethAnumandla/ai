@@ -43,11 +43,22 @@ def attach_receipt_to_manual_workflow(
     Save uploaded files on the existing manual draft expense (no vision scan).
     Returns (updated_state, preview_card, assistant_message, category_picker, ui_actions).
     """
-    company_id = int(
-        workflow_state.slots.get("company_id")
-        or getattr(user, "company_id", None)
-        or 1
-    )
+    if workflow_state.slots.get("company_id") is not None:
+        company_id = int(workflow_state.slots["company_id"])
+    elif getattr(user, "company_id", None) is not None:
+        company_id = int(user.company_id)
+    else:
+        company_id = 1
+        expense_id_hint = workflow_state.expense_id or workflow_state.slots.get("expense_id")
+        if expense_id_hint:
+            row = (
+                db.query(Expense.company_id)
+                .filter(Expense.id == int(expense_id_hint), Expense.user_id == user.id)
+                .first()
+            )
+            if row:
+                company_id = int(row[0])
+    workflow_state.slots["company_id"] = company_id
     state, expense_id = persist_workflow_draft(
         db, user, workflow_state, company_id=company_id
     )

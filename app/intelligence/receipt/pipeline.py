@@ -57,8 +57,12 @@ class ReceiptIntelligencePipeline:
         *,
         bill_index: int = 0,
         force_rescan: bool = False,
+        company_id: Optional[int] = None,
     ) -> ReceiptPipelineResult:
-        tenant_id = int(getattr(user, "company_id", None) or resolve_tenant_id(user))
+        if company_id is not None:
+            tenant_id = int(company_id)
+        else:
+            tenant_id = int(getattr(user, "company_id", None) or resolve_tenant_id(user))
         company_id = tenant_id
         ctx = TenantUserContext(tenant_id=tenant_id, user_id=user.id, company_id=company_id)
 
