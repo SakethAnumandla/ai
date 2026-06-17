@@ -62,12 +62,16 @@ async def _run_startup_init() -> None:
         await loop.run_in_executor(None, _migrate_business)
         await loop.run_in_executor(None, _migrate_submitted_by)
         from app.migrations.add_expense_company_scope import run as _migrate_company_scope
-        from app.migrations.drop_external_user_fk import run as _migrate_drop_user_fk
 
         await loop.run_in_executor(None, _migrate_company_scope)
+    except Exception as exc:
+        logger.warning("startup_init migrations: %s", exc)
+    try:
+        from app.migrations.drop_external_user_fk import run as _migrate_drop_user_fk
+
         await loop.run_in_executor(None, _migrate_drop_user_fk)
     except Exception as exc:
-        logger.warning("startup_init: %s", exc)
+        logger.error("drop_external_user_fk failed (expenses need external user_id): %s", exc)
     finally:
         _startup_ready = True
         logger.info("startup_init complete ready=%s", _startup_ready)
@@ -168,11 +172,21 @@ async def health_check():
 
     loop = asyncio.get_running_loop()
     db = await loop.run_in_executor(None, check_database)
+
+    def _schema_flags() -> dict:
+        if not db.get("ok"):
+            return {}
+        from app.migrations.drop_external_user_fk import expenses_user_id_fk_present
+
+        return {"expenses_user_id_fk": expenses_user_id_fk_present()}
+
+    schema = await loop.run_in_executor(None, _schema_flags)
     openai_configured = bool((settings.openai_api_key or "").strip())
     return {
         "status": "healthy" if db["ok"] else "degraded",
         "startup_ready": _startup_ready,
         "database": db,
+        "schema": schema,
         "openai": {
             "configured": openai_configured,
             "primary_model": settings.openai_primary_model,
