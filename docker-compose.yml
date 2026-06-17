@@ -1,5 +1,10 @@
 # Single database: set DATABASE_URL in .env (Aiven Postgres).
-# Run: docker compose up -d
+#
+# Production-like (code baked into image — rebuild after edits):
+#   docker compose up -d --build
+#
+# Local dev (live reload when ./app changes):
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build
 
 services:
   backend:

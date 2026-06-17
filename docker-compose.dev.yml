@@ -1,0 +1,16 @@
+# Local development: mount source code + uvicorn --reload (no image rebuild per edit).
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build
+#
+# Edit files under ./app — FastAPI reloads within ~1–2 seconds.
+
+services:
+  backend:
+    volumes:
+      - ./app:/app/app:cached
+      - ./uploads:/app/uploads
+    environment:
+      UVICORN_RELOAD: "true"
+      UVICORN_WORKERS: "1"
+    command: ["uvicorn", "app.main:app"]

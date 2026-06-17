@@ -74,7 +74,6 @@ async def pending_expense_approvals(
         bizwy_user_type=scope.user_type,
     )
 
-
 @router.get("/{expense_id}/approval-workflow")
 async def expense_approval_workflow(
     expense_id: int,
@@ -127,6 +126,7 @@ async def scan_manual_expense(
     return await ManualExpenseService(db).scan_manual_prefill(
         ScopedActor.from_scope(current_user), file, force_duplicate=force_duplicate
     )
+
 
 
 
