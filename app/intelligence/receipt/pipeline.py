@@ -1,4 +1,6 @@
 """Receipt intelligence pipeline — vision scan → entities → fraud → autofill → human review."""
+from typing import Optional
+
 from sqlalchemy.orm import Session, joinedload
 
 from app.ai.schemas.common import TenantUserContext
